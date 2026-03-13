@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "photogal"
+version = "0.1.0"
+description = "PhotoGal - progressive photo library organizer"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.9",
+    "rich>=13.0",
+    "Pillow>=10.0",
+    "pillow-heif>=0.13",
+    "exifread>=3.0",
+    "imagehash>=4.3",
+    "numpy>=1.24",
+    "torch>=2.0",
+    "open-clip-torch>=2.24",
+    "scikit-learn>=1.3",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "reverse-geocoder>=1.5",
+    "aiofiles>=23.0",
+    "argostranslate>=1.9",
+    "insightface>=0.7.3",
+    "opencv-python-headless>=4.8",
+    "coremltools>=7.0; sys_platform=='darwin'",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+photogal = "photogal.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/photogal"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+src = ["src", "tests"]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]

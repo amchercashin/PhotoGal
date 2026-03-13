@@ -1,0 +1,43 @@
+# macOS
+.DS_Store
+
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/src/**/__pycache__/
+backend/src/**/*.pyc
+backend/dist/
+backend/build/
+backend/*.egg-info/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/binaries/
+
+# DB & cache (user data)
+*.db
+.thumbnails/
+
+# Test media data
+testing/
+
+# Secrets
+.env
+backend/tests/__pycache__/
+
+# Claude Code / Superpowers (internal)
+.claude/
+.superpowers/
+docs/superpowers/
+CLAUDE.md
+PROGRESS.md
+
+# Dev-only utilities
+backend/profiling_run.py
+
+# Build scripts output
+scripts/*.log

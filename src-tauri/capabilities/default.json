@@ -1,0 +1,33 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/schema/capability.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "args": true,
+          "name": "binaries/photogal-server",
+          "sidecar": true
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "args": true,
+          "name": "binaries/photogal-server",
+          "sidecar": true
+        }
+      ]
+    },
+    "shell:allow-kill",
+    "dialog:allow-open",
+    "dialog:allow-save"
+  ]
+}
