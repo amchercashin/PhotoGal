@@ -1,5 +1,6 @@
 """Configuration and constants."""
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,15 +50,23 @@ def load_config() -> Config:
     return Config()
 
 
+def _get_data_dir() -> Path:
+    """Platform-aware app data directory."""
+    if sys.platform == "darwin":
+        d = Path.home() / "Library" / "Application Support" / "com.photogal.desktop"
+    else:
+        d = Path.home() / ".photogal"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def get_db_path() -> Path:
-    """Default DB path: ~/.photogal/photogal.db"""
-    data_dir = Path.home() / ".photogal"
-    data_dir.mkdir(exist_ok=True)
-    return data_dir / "photogal.db"
+    """Default DB path (platform-aware)."""
+    return _get_data_dir() / "photogal.db"
 
 
 def get_thumbnail_cache_dir() -> Path:
-    """Default thumbnail cache: ~/.photogal/.thumbnails/"""
-    d = Path.home() / ".photogal" / ".thumbnails"
+    """Default thumbnail cache (platform-aware)."""
+    d = _get_data_dir() / ".thumbnails"
     d.mkdir(parents=True, exist_ok=True)
     return d
