@@ -36,7 +36,9 @@ def _warmup(db: Database) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from photogal.api.deps import get_db
-    threading.Thread(target=_warmup, args=(get_db(),), daemon=True).start()
+    db = get_db()
+    db.cleanup_orphaned_persons()
+    threading.Thread(target=_warmup, args=(db,), daemon=True).start()
     yield
 
 

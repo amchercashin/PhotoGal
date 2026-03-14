@@ -4,9 +4,12 @@ Each discovered photo is inserted into DB at processing_level=0.
 """
 
 import hashlib
+import logging
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import exifread
 
@@ -287,16 +290,35 @@ class Scanner:
         from photogal.config import get_thumbnail_cache_dir
         thumb_dir = str(get_thumbnail_cache_dir())
 
-        with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {
-                executor.submit(_process_single_file, str(f), self.config.hash_buffer_size, thumb_dir): f
-                for f in files
-            }
-            for future in as_completed(futures):
+        try:
+            with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = {
+                    executor.submit(_process_single_file, str(f), self.config.hash_buffer_size, thumb_dir): f
+                    for f in files
+                }
+                for future in as_completed(futures):
+                    done += 1
+                    if progress_callback:
+                        progress_callback(done)
+                    result = future.result()
+                    if result is None:
+                        continue
+                    if db.photo_exists(result["content_hash"], result["original_path"]):
+                        continue
+                    result["source_id"] = source_id
+                    batch.append(result)
+                    if len(batch) >= self.config.batch_size:
+                        ids = db.insert_photos_batch(batch)
+                        new_ids.extend(ids)
+                        batch = []
+        except (BrokenPipeError, OSError, RuntimeError) as e:
+            logger.warning("ProcessPoolExecutor failed (%s), falling back to serial processing", e)
+            done = 0
+            for f in files:
                 done += 1
                 if progress_callback:
                     progress_callback(done)
-                result = future.result()
+                result = _process_single_file(str(f), self.config.hash_buffer_size, thumb_dir)
                 if result is None:
                     continue
                 if db.photo_exists(result["content_hash"], result["original_path"]):
