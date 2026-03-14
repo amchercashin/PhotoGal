@@ -51,9 +51,10 @@ pub fn run() {
         .manage(Mutex::new(port))
         .setup(move |app| {
             // Select GPU sidecar if available, otherwise CPU sidecar
-            let gpu_sidecar_path = dirs::home_dir()
-                .unwrap_or_default()
-                .join(".photogal")
+            let gpu_sidecar_path = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".photogal"))
                 .join("sidecars")
                 .join("photogal-server-gpu");
             let sidecar_name = if gpu_sidecar_path.exists() {
