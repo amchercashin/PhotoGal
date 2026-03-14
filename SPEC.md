@@ -191,8 +191,8 @@ Selection and marking state is **global** — persists across tab switches.
 Tauri window
   └── WebView → React app (Vite build)
         └── HTTP calls → FastAPI (localhost:port)
-              └── SQLite DB (~/.photogal/photogal.db)
-              └── Thumbnails (~/.photogal/.thumbnails/)
+              └── SQLite DB (~/Library/Application Support/com.photogal.desktop/photogal.db)
+              └── Thumbnails (~/Library/Application Support/com.photogal.desktop/.thumbnails/)
 
 Tauri Rust shell:
   - Launches Python sidecar (FastAPI) on startup

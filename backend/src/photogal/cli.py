@@ -10,7 +10,7 @@ app = typer.Typer(name="photogal", help="PhotoGal photo library organizer")
 def serve(
     host: str = typer.Option("127.0.0.1", help="Host to bind"),
     port: int = typer.Option(8765, help="Port to listen on"),
-    db: str = typer.Option(None, help="Database path (default: ~/.photogal/photogal.db)"),
+    db: str = typer.Option(None, help="Database path (default: ~/Library/Application Support/com.photogal.desktop/photogal.db)"),
     reload: bool = typer.Option(False, help="Auto-reload on code changes"),
 ):
     """Start the PhotoGal API server."""
