@@ -236,7 +236,7 @@ export function AllPhotosTable() {
                   data-photo-id={photo.id}
                   className={[
                     'cursor-pointer border-b border-neutral-800/50 transition-colors',
-                    selected ? 'ring-2 ring-blue-400 ring-inset' : 'hover:bg-neutral-800/50',
+                    selected ? 'bg-blue-900/40' : 'hover:bg-neutral-800/50',
                     marked ? 'opacity-60' : '',
                   ].join(' ')}
                   onClick={(e) => {

@@ -311,7 +311,7 @@ class Scanner:
                         ids = db.insert_photos_batch(batch)
                         new_ids.extend(ids)
                         batch = []
-        except (BrokenPipeError, OSError, RuntimeError) as e:
+        except Exception as e:
             logger.warning("ProcessPoolExecutor failed (%s), falling back to serial processing", e)
             done = 0
             for f in files:

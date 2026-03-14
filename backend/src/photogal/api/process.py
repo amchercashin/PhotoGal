@@ -168,7 +168,7 @@ def run_marked(req: RunMarkedRequest, db: Database = Depends(get_db)):
             if req.target_level >= 3:
                 placeholders = ",".join("?" * len(active_ids))
                 l2_rows = db.conn.execute(
-                    f"SELECT id FROM photos WHERE id IN ({placeholders}) AND processing_level = 2",
+                    f"SELECT id FROM photos WHERE id IN ({placeholders}) AND processing_level >= 2",
                     active_ids,
                 ).fetchall()
                 l2_ids = [r["id"] for r in l2_rows]

@@ -56,9 +56,9 @@ export function PipelineBanner() {
     ? Math.min(100, Math.round((status.progress / status.total) * 100))
     : null
 
-  // Prefer stage-based label (shows current running level, not max_level)
+  // Prefer stage-based label; don't show level name during 'starting' to avoid false label flash
   const levelLabel = (status.stage && STAGE_LEVEL_NAMES[status.stage])
-    || (status.level != null ? (LEVEL_NAMES[status.level] ?? `Level ${status.level}`) : '')
+    || (status.stage !== 'starting' && status.level != null ? (LEVEL_NAMES[status.level] ?? `Level ${status.level}`) : 'Starting...')
 
   // ETA: compute from stage_elapsed_s + progress (per-stage rate)
   let etaText: string | null = null
