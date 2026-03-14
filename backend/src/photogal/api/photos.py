@@ -145,6 +145,7 @@ def bulk_delete_photos(req: BulkDeleteRequest, db: Database = Depends(get_db)):
         return {"deleted": 0}
     db.delete_photos_bulk(req.photo_ids)
     db.cleanup_orphan_clusters()
+    db.cleanup_orphaned_persons()
     db.commit()
     return {"deleted": len(req.photo_ids)}
 

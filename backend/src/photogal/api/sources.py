@@ -46,6 +46,7 @@ def remove_source(
         if photo_ids:
             db.delete_photos_bulk(photo_ids)
             db.cleanup_orphan_clusters()
+            db.cleanup_orphaned_persons()
     else:
         db.conn.execute("UPDATE photos SET source_id = NULL WHERE source_id = ?", (source_id,))
     db.conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
