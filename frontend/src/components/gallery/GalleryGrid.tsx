@@ -59,7 +59,6 @@ export function GalleryGrid() {
       avg_gps_lat: null,
       avg_gps_lon: null,
       location_city: null,
-      event_id: null,
       best_photo_blur: null,
       best_photo_exposure: null,
       has_exact_duplicate: false,
@@ -320,6 +319,9 @@ export function GalleryGrid() {
           if (cur?.best_photo_id) openViewer(cur.best_photo_id)
           break
         }
+        case 'Home': e.preventDefault(); moveCursor(-cursorIdxRef.current, false); break
+        case 'End': e.preventDefault(); moveCursor(items.length - 1 - cursorIdxRef.current, false); break
+        case 'Escape': e.preventDefault(); useSelectionStore.getState().clearSelection(); break
         case '+':
         case '=':
           if (e.ctrlKey || e.metaKey) { e.preventDefault(); zoomIn() }
@@ -353,6 +355,8 @@ export function GalleryGrid() {
     <div
       ref={gridRef}
       tabIndex={0}
+      role="grid"
+      aria-label="Photo gallery"
       className="outline-none w-full h-full overflow-y-auto"
       style={{ scrollbarGutter: 'stable' }}
     >

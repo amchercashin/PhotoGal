@@ -95,6 +95,7 @@ def _reverse_geocode_batch(photos: list) -> dict[int, dict]:
     """Batch reverse geocode. Returns {photo_id: {location fields}}."""
     rg = _get_geocoder()
     if rg is None:
+        logger.info("Geocoder not available, skipping geocoding for %d photos", len(photos))
         return {}
     gps_photos = [
         (p, p["exif_gps_lat"], p["exif_gps_lon"])
@@ -106,7 +107,8 @@ def _reverse_geocode_batch(photos: list) -> dict[int, dict]:
     coords = [(lat, lon) for _, lat, lon in gps_photos]
     try:
         results = rg.search(coords, mode=1, verbose=False)
-    except Exception:
+    except Exception as e:
+        logger.warning("Geocoding batch failed for %d photos: %s", len(gps_photos), e)
         return {}
     geo_by_id = {}
     for (p, _, _), r in zip(gps_photos, results):
@@ -676,12 +678,15 @@ class Analyzer:
             new_dt = _parse_exif_date(new_p["exif_date"])
 
             # Get candidates — binary search for time-based groups
+            # If photo has no parseable date but group is time-based, fall back to all candidates
             if use_time and new_dt is not None:
                 candidates = self._find_time_candidates(
                     existing_by_group[group], existing_dates[group],
                     new_dt, max_time,
                 )
             else:
+                if use_time and new_dt is None:
+                    logger.info("Photo %d has no parseable date, using pHash-only matching", new_p["id"])
                 candidates = existing_by_group[group]
 
             best_match = None
@@ -689,9 +694,9 @@ class Analyzer:
             for cand in candidates:
                 if not cand["perceptual_hash"]:
                     continue
-                if use_time:
+                if use_time and new_dt is not None:
                     cdt = _parse_exif_date(cand["exif_date"])
-                    if new_dt is None or cdt is None:
+                    if cdt is None:
                         continue
                     if abs((new_dt - cdt).total_seconds()) > max_time:
                         continue
@@ -936,6 +941,7 @@ class Analyzer:
                   progress_callback=None, stage_callback=None) -> dict:
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         errors = 0
+        embedded_ids: list[int] = []  # track IDs with embeddings written (for cleanup on failure)
 
         # Check if CLIP model needs downloading (first launch)
         if self._clip is None and stage_callback:
@@ -952,103 +958,119 @@ class Analyzer:
         # Download argos-translate in background while CLIP processes
         threading.Thread(target=self._ensure_argos, daemon=True).start()
 
-        # Phase 4: CLIP embeddings
-        if stage_callback:
-            stage_callback("embeddings", len(photos))
-        batch_size = (self.config.clip_batch_size_gpu if clip.device != "cpu"
-                      else self.config.clip_batch_size_cpu)
-        if batch_size is None:
-            from photogal.device import get_device_info
-            batch_size = get_device_info().get_optimal_batch_size("clip")
+        try:
+            # Phase 4: CLIP embeddings
+            if stage_callback:
+                stage_callback("embeddings", len(photos))
+            batch_size = (self.config.clip_batch_size_gpu if clip.device != "cpu"
+                          else self.config.clip_batch_size_cpu)
+            if batch_size is None:
+                from photogal.device import get_device_info
+                batch_size = get_device_info().get_optimal_batch_size("clip")
 
-        embeddings: dict[int, np.ndarray | None] = {p["id"]: None for p in photos}
+            embeddings: dict[int, np.ndarray | None] = {p["id"]: None for p in photos}
 
-        # Resolve thumbnails for CLIP (resizes to 224px; 400px thumbnail suffices)
-        from photogal.config import get_thumbnail_cache_dir
-        from photogal.thumbnails import get_thumbnail_path
-        thumb_cache_dir = get_thumbnail_cache_dir()
+            # Resolve thumbnails for CLIP (resizes to 224px; 400px thumbnail suffices)
+            from photogal.config import get_thumbnail_cache_dir
+            from photogal.thumbnails import get_thumbnail_path
+            thumb_cache_dir = get_thumbnail_cache_dir()
 
-        with stage_timer("analyze/embeddings", items_label="photos") as t:
-            for i in range(0, len(photos), batch_size):
-                batch = photos[i:i + batch_size]
-                fps = []
-                for p in batch:
-                    tp = get_thumbnail_path(thumb_cache_dir, content_hash=p["content_hash"])
-                    fps.append(str(tp) if tp.exists() else resolve_photo_path(p))
-                try:
-                    batch_embs = clip.embed_batch(fps)
-                except RuntimeError:
-                    batch_embs = []
-                    for fp in fps:
-                        try:
-                            batch_embs.append(clip.embed_image(fp))
-                        except Exception:
-                            batch_embs.append(None)
-                            errors += 1
-                valid_pairs = [(photo, emb) for photo, emb in zip(batch, batch_embs)
-                               if emb is not None]
-                if valid_pairs:
-                    valid_embs = [emb for _, emb in valid_pairs]
-                    scores = clip.aesthetic_scores_batch(valid_embs)
-                    for (photo, emb), aesthetic in zip(valid_pairs, scores):
-                        if not db.set_embedding(photo["id"], emb.tobytes()):
-                            continue  # photo deleted during processing
-                        db.update_photo(photo["id"], quality_aesthetic=aesthetic)
-                        embeddings[photo["id"]] = emb
-                if progress_callback:
-                    progress_callback(i + len(batch))
-            t.items = len(photos)
-        db.log_perf(run_id, t.stage, t.duration_s, t.items, t.items_label)
-        db.commit()
+            with stage_timer("analyze/embeddings", items_label="photos") as t:
+                for i in range(0, len(photos), batch_size):
+                    batch = photos[i:i + batch_size]
+                    fps = []
+                    for p in batch:
+                        tp = get_thumbnail_path(thumb_cache_dir, content_hash=p["content_hash"])
+                        fps.append(str(tp) if tp.exists() else resolve_photo_path(p))
+                    try:
+                        batch_embs = clip.embed_batch(fps)
+                    except RuntimeError:
+                        batch_embs = []
+                        for fp in fps:
+                            try:
+                                batch_embs.append(clip.embed_image(fp))
+                            except Exception:
+                                batch_embs.append(None)
+                                errors += 1
+                    valid_pairs = [(photo, emb) for photo, emb in zip(batch, batch_embs)
+                                   if emb is not None]
+                    if valid_pairs:
+                        valid_embs = [emb for _, emb in valid_pairs]
+                        scores = clip.aesthetic_scores_batch(valid_embs)
+                        for (photo, emb), aesthetic in zip(valid_pairs, scores):
+                            if not db.set_embedding(photo["id"], emb.tobytes()):
+                                continue  # photo deleted during processing
+                            db.update_photo(photo["id"], quality_aesthetic=aesthetic)
+                            embeddings[photo["id"]] = emb
+                            embedded_ids.append(photo["id"])
+                    if progress_callback:
+                        progress_callback(i + len(batch))
+                t.items = len(photos)
+            db.log_perf(run_id, t.stage, t.duration_s, t.items, t.items_label)
+            db.commit()
 
-        # Phase 5: zero-shot category classification (22 categories, prompt ensembling)
-        cat_keys = list(_CATEGORIES.keys())
-        cat_avg_embs = _get_category_embeddings(clip)
+            # Phase 5: zero-shot category classification (22 categories, prompt ensembling)
+            cat_keys = list(_CATEGORIES.keys())
+            cat_avg_embs = _get_category_embeddings(clip)
 
-        classification_updates = []
-        for photo in photos:
-            img_emb = embeddings[photo["id"]]
-            if img_emb is None:
-                continue
-            sims = cat_avg_embs @ img_emb
-            best_idx = int(np.argmax(sims))
-            category = cat_keys[best_idx]
-            is_tech = 1 if category in _TECHNICAL_CATEGORIES else 0
-            classification_updates.append((category, is_tech, photo["id"]))
-        db.update_photos_batch(
-            ["content_category", "is_technical"],
-            classification_updates,
-        )
-        db.commit()
+            classification_updates = []
+            for photo in photos:
+                img_emb = embeddings[photo["id"]]
+                if img_emb is None:
+                    continue
+                sims = cat_avg_embs @ img_emb
+                best_idx = int(np.argmax(sims))
+                category = cat_keys[best_idx]
+                is_tech = 1 if category in _TECHNICAL_CATEGORIES else 0
+                classification_updates.append((category, is_tech, photo["id"]))
+            db.update_photos_batch(
+                ["content_category", "is_technical"],
+                classification_updates,
+            )
+            db.commit()
 
-        # Phase 5.5: CLIP-based cluster merge
-        if stage_callback:
-            stage_callback("merging", len(photos))
-        with stage_timer("analyze/merging", items_label="merges") as t:
-            n_merged = self._clip_merge_clusters(db, photos, embeddings)
-            t.items = n_merged
-        db.log_perf(run_id, t.stage, t.duration_s, t.items, t.items_label)
-        db.commit()
+            # Phase 5.5: CLIP-based cluster merge
+            if stage_callback:
+                stage_callback("merging", len(photos))
+            with stage_timer("analyze/merging", items_label="merges") as t:
+                n_merged = self._clip_merge_clusters(db, photos, embeddings)
+                t.items = n_merged
+            db.log_perf(run_id, t.stage, t.duration_s, t.items, t.items_label)
+            db.commit()
 
-        # Phase 6: re-rank clusters using aesthetic scores
-        if stage_callback:
-            stage_callback("ranking", len(photos))
+            # Phase 6: re-rank clusters using aesthetic scores
+            if stage_callback:
+                stage_callback("ranking", len(photos))
 
-        with stage_timer("analyze/ranking", items_label="clusters") as t:
-            n_ranked = self._rank_clusters(db)
-            t.items = n_ranked
-        db.log_perf(run_id, t.stage, t.duration_s, t.items, t.items_label)
+            with stage_timer("analyze/ranking", items_label="clusters") as t:
+                n_ranked = self._rank_clusters(db)
+                t.items = n_ranked
+            db.log_perf(run_id, t.stage, t.duration_s, t.items, t.items_label)
 
-        # Promote to level 2 (batch)
-        level_updates = [(2, p["id"]) for p in photos if embeddings.get(p["id"]) is not None]
-        db.update_photos_batch(["processing_level"], level_updates)
-        db.commit()
+            # Promote to level 2 (batch)
+            level_updates = [(2, p["id"]) for p in photos if embeddings.get(p["id"]) is not None]
+            db.update_photos_batch(["processing_level"], level_updates)
+            db.commit()
 
-        # Invalidate search embedding cache so new embeddings are picked up
-        from photogal.search import invalidate_cache
-        invalidate_cache()
+            # Invalidate search embedding cache so new embeddings are picked up
+            from photogal.search import invalidate_cache
+            invalidate_cache()
 
-        return {"processed": len(photos), "errors": errors}
+            return {"processed": len(photos), "errors": errors}
+
+        except Exception as e:
+            logger.error("L2 pipeline failed: %s", e, exc_info=True)
+            if embedded_ids:
+                logger.warning("Cleaning up %d partial embeddings", len(embedded_ids))
+                for i in range(0, len(embedded_ids), 900):
+                    batch = embedded_ids[i:i + 900]
+                    placeholders = ",".join("?" * len(batch))
+                    db.conn.execute(
+                        f"DELETE FROM photo_embeddings WHERE photo_id IN ({placeholders})",
+                        batch,
+                    )
+                db.commit()
+            raise
 
     @staticmethod
     def _ensure_argos():

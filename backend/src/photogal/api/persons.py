@@ -12,9 +12,11 @@ router = APIRouter(prefix="/persons", tags=["persons"])
 @router.get("/")
 def list_persons(
     include_hidden: bool = False,
+    limit: int = 100,
+    offset: int = 0,
     db: Database = Depends(get_db),
 ):
-    persons = db.list_persons(include_hidden=include_hidden)
+    persons = db.list_persons(include_hidden=include_hidden, limit=limit, offset=offset)
     return [_person_row(p) for p in persons]
 
 

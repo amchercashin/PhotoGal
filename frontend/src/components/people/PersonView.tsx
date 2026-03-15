@@ -1,11 +1,36 @@
+import { useState, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type Person } from '../../api/client'
+import { useUIStore } from '../../store/ui'
+import { useSelectionStore } from '../../store/selection'
 
 export function PersonView({ person, onBack }: { person: Person; onBack: () => void }) {
   const { data } = useQuery({
     queryKey: ['person-photos', person.id],
     queryFn: () => api.getPersonPhotos(person.id),
   })
+
+  const [focusedIdx, setFocusedIdx] = useState<number>(-1)
+
+  const openInViewer = useCallback((photoId: number) => {
+    useSelectionStore.getState().selectOne({ type: 'photo', id: photoId })
+    useUIStore.getState().openViewer(photoId)
+  }, [])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (!data?.photo_ids?.length) return
+    const ids = data.photo_ids
+    if (e.key === 'Enter' && focusedIdx >= 0 && focusedIdx < ids.length) {
+      e.preventDefault()
+      openInViewer(ids[focusedIdx])
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault()
+      setFocusedIdx((i) => Math.min(i + 1, ids.length - 1))
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      setFocusedIdx((i) => Math.max(i - 1, 0))
+    }
+  }, [data, focusedIdx, openInViewer])
 
   const thumbUrl = person.representative_face_id
     ? api.getFaceThumbUrl(person.representative_face_id)
@@ -39,13 +64,24 @@ export function PersonView({ person, onBack }: { person: Person; onBack: () => v
       </div>
 
       {/* Photo grid */}
-      <div className="flex-1 overflow-auto p-2">
+      <div
+        className="flex-1 overflow-auto p-2 outline-none"
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
+      >
         {data?.photo_ids ? (
           <div className="grid gap-1" style={{
             gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
           }}>
-            {data.photo_ids.map((pid) => (
-              <div key={pid} className="aspect-square bg-neutral-900 rounded overflow-hidden">
+            {data.photo_ids.map((pid, idx) => (
+              <div
+                key={pid}
+                className={`aspect-square bg-neutral-900 rounded overflow-hidden cursor-pointer ${
+                  idx === focusedIdx ? 'ring-2 ring-teal-400' : ''
+                }`}
+                onClick={() => setFocusedIdx(idx)}
+                onDoubleClick={() => openInViewer(pid)}
+              >
                 <img
                   src={api.thumbnailUrl(pid)}
                   alt=""

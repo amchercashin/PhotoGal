@@ -277,7 +277,7 @@ function FullscreenOverlay({
 
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault()
-    setZoom((z) => Math.max(1.0, Math.min(4, z - e.deltaY * 0.001)))
+    setZoom((z) => Math.max(1.0, Math.min(4, z - e.deltaY * 0.0005)))
   }
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -301,7 +301,7 @@ function FullscreenOverlay({
     <div
       className="fixed inset-0 z-50 bg-black flex items-center justify-center"
       style={{ cursor: zoom > 1 ? 'grab' : 'default' }}
-      onDoubleClick={onClose}
+      onDoubleClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }}
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
@@ -330,9 +330,12 @@ function FullscreenOverlay({
         </svg>
       </button>
 
-      {/* Zoom indicator */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/50 text-white text-sm px-3 py-1 rounded-full">
-        {Math.round(zoom * 100)}%
+      {/* Zoom presets */}
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 z-10">
+        <button onClick={(e) => { e.stopPropagation(); setZoom(1); setPan({ x: 0, y: 0 }) }} className="px-2 py-1 bg-black/60 text-white rounded text-xs hover:bg-black/80">1x</button>
+        <button onClick={(e) => { e.stopPropagation(); setZoom(2); setPan({ x: 0, y: 0 }) }} className="px-2 py-1 bg-black/60 text-white rounded text-xs hover:bg-black/80">2x</button>
+        <button onClick={(e) => { e.stopPropagation(); setZoom(4); setPan({ x: 0, y: 0 }) }} className="px-2 py-1 bg-black/60 text-white rounded text-xs hover:bg-black/80">4x</button>
+        <span className="px-2 py-1 bg-black/40 text-white/60 rounded text-xs">{Math.round(zoom * 100)}%</span>
       </div>
 
       {/* Nav */}

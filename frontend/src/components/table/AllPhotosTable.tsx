@@ -213,6 +213,7 @@ export function AllPhotosTable() {
                     !col.noSort ? 'cursor-pointer hover:text-neutral-200' : '',
                   ].join(' ')}
                   onClick={() => !col.noSort && handleSort(col.key)}
+                  aria-sort={tableSortBy === col.key ? (tableSortDir === 'ASC' ? 'ascending' : 'descending') : undefined}
                 >
                   {col.label}
                   {tableSortBy === col.key && (
@@ -230,6 +231,7 @@ export function AllPhotosTable() {
               const ref = { type: 'photo' as const, id: photo.id }
               const selected = isSelected(ref)
               const marked = isMarked(ref)
+              const dirPath = (photo.current_path || photo.original_path).replace(/\/[^/]+$/, '')
               return (
                 <tr
                   key={photo.id}
@@ -238,7 +240,7 @@ export function AllPhotosTable() {
                   className={[
                     'cursor-pointer border-b border-neutral-800/50 transition-colors',
                     selected ? 'bg-blue-900/40' : 'hover:bg-neutral-800/50',
-                    marked ? 'opacity-60' : '',
+                    marked ? 'border-l-4 border-l-green-500' : 'border-l-4 border-l-transparent',
                   ].join(' ')}
                   onClick={(e) => {
                     if (e.shiftKey) {
@@ -278,13 +280,13 @@ export function AllPhotosTable() {
                   <td
                     className="px-2 py-1 text-neutral-500 truncate max-w-0 cursor-pointer hover:text-blue-400"
                     style={{ maxWidth: 200 }}
-                    title={(photo.current_path || photo.original_path).replace(/\/[^/]+$/, '')}
+                    title={dirPath}
                     onClick={(e) => {
                       e.stopPropagation()
                       api.revealInFinder(photo.current_path || photo.original_path)
                     }}
                   >
-                    {(photo.current_path || photo.original_path).replace(/\/[^/]+$/, '').split('/').pop()}
+                    {dirPath.split('/').pop()}
                   </td>
                   <td className="px-2 py-1 text-neutral-400 whitespace-nowrap">{photo.exif_date?.slice(0, 10)}</td>
                   <td className="px-2 py-1 text-neutral-400 truncate" style={{ maxWidth: 140 }}>{photo.exif_camera}</td>

@@ -2,7 +2,7 @@
 
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from photogal.api.deps import get_clip, get_db
@@ -35,6 +35,8 @@ class SearchResponse(BaseModel):
 def search_photos(req: SearchRequest):
     db = get_db()
     query = req.query.strip()
+    if len(query) > 256:
+        raise HTTPException(status_code=400, detail="Query too long (max 256 characters)")
     if not query:
         return SearchResponse(
             query=query, results=[], total_with_embeddings=db.count_embeddings(), elapsed_ms=0,

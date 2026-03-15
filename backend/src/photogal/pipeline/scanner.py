@@ -73,8 +73,8 @@ def _extract_exif(filepath: str) -> dict:
                 result["exif_height"] = int(str(tags["EXIF ExifImageLength"]))
             except ValueError:
                 pass
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("EXIF extraction failed for %s: %s", filepath, e)
 
     return result
 
@@ -89,7 +89,8 @@ def _gps_to_decimal(gps_tag, ref_tag) -> float | None:
         if str(ref_tag) in ("S", "W"):
             decimal = -decimal
         return decimal
-    except Exception:
+    except Exception as e:
+        logger.warning("GPS conversion failed for %s: %s", gps_tag, e)
         return None
 
 
@@ -106,7 +107,8 @@ def _process_single_file(filepath: str, buffer_size: int, thumb_cache_dir: str |
                 generate_thumbnail(filepath, Path(thumb_cache_dir), content_hash=content_hash)
                 tp = get_thumbnail_path(Path(thumb_cache_dir), content_hash=content_hash)
                 thumb_path = str(tp) if tp.exists() else None
-            except Exception:
+            except Exception as e:
+                logger.warning("Thumbnail generation failed for %s: %s", filepath, e)
                 thumb_path = None
 
             # Quality analysis on freshly-written thumbnail (hot in OS cache)
@@ -116,8 +118,8 @@ def _process_single_file(filepath: str, buffer_size: int, thumb_cache_dir: str |
                     q = _analyze_single_photo(filepath, thumb_path)
                     if q:
                         quality = q
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Quality analysis failed for %s: %s", filepath, e)
 
         return {
             "original_path": filepath,
@@ -130,7 +132,8 @@ def _process_single_file(filepath: str, buffer_size: int, thumb_cache_dir: str |
             "processing_level": 0,
             **exif,
         }
-    except Exception:
+    except Exception as e:
+        logger.warning("Processing failed for %s: %s", filepath, e)
         return None
 
 

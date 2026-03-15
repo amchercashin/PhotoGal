@@ -27,7 +27,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["dmg"],
     "externalBin": [
       "binaries/photogal-server"
     ],
@@ -41,7 +41,7 @@
   },
   "plugins": {
     "shell": {
-      "open": true
+      "open": false
     }
   }
 }

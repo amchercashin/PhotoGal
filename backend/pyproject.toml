@@ -21,7 +21,6 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "reverse-geocoder>=1.5",
-    "aiofiles>=23.0",
     "argostranslate>=1.9",
     "insightface>=0.7.3",
     "opencv-python-headless>=4.8",

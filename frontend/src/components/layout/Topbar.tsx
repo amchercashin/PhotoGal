@@ -100,6 +100,8 @@ export function Topbar() {
     }
   }
 
+  const tabAbortRef = useRef<AbortController | null>(null)
+
   // Extract all clusters from infinite query cache
   function getCachedClusters(): Cluster[] {
     const data = qc.getQueryData<{ pages: ClusterListResult[] }>(['clusters'])
@@ -108,86 +110,94 @@ export function Topbar() {
   }
 
   async function handleTabClick(tabId: Tab) {
-    const selStore = useSelectionStore.getState()
-    const selectedRefs = [...selStore.selected].map(parseItemKey).filter(Boolean) as import('../../store/selection').ItemRef[]
-    const clusters = getCachedClusters()
-    const findCluster = (id: number) => clusters?.find((c) => c.id === id)
+    tabAbortRef.current?.abort()
+    tabAbortRef.current = new AbortController()
 
-    const lastPhoto = selectedRefs.filter((r) => r.type === 'photo').pop()
-    const lastCluster = selectedRefs.filter((r) => r.type === 'cluster').pop()
+    try {
+      const selStore = useSelectionStore.getState()
+      const selectedRefs = [...selStore.selected].map(parseItemKey).filter(Boolean) as import('../../store/selection').ItemRef[]
+      const clusters = getCachedClusters()
+      const findCluster = (id: number) => clusters?.find((c) => c.id === id)
 
-    if (tabId === 'viewer') {
-      if (lastPhoto) { openViewer(lastPhoto.id); return }
-      if (lastCluster) {
-        if (lastCluster.id < 0) {
-          // Search pseudo-cluster: -id is the real photo_id
-          openViewer(-lastCluster.id); return
-        }
-        const cluster = findCluster(lastCluster.id)
-        if (cluster?.best_photo_id) { openViewer(cluster.best_photo_id); return }
-      }
-    }
+      const lastPhoto = selectedRefs.filter((r) => r.type === 'photo').pop()
+      const lastCluster = selectedRefs.filter((r) => r.type === 'cluster').pop()
 
-    if (tabId === 'gallery' && lastPhoto) {
-      const { searchQuery, activeClusterId } = useUIStore.getState()
-      if (searchQuery) {
-        // Search mode: select the pseudo-cluster for this photo (id = -photoId)
-        const pseudoId = -lastPhoto.id
-        selStore.selectOne({ type: 'cluster', id: pseudoId })
-        useUIStore.getState().setActiveCluster(pseudoId, lastPhoto.id)
-      } else if (activeClusterId && activeClusterId > 0 && clusters.length) {
-        const cluster = findCluster(activeClusterId)
-        if (cluster) {
-          selStore.selectOne({ type: 'cluster', id: cluster.id })
-          useUIStore.getState().setActiveCluster(cluster.id, cluster.best_photo_id ?? null)
+      if (tabId === 'viewer') {
+        if (lastPhoto) { openViewer(lastPhoto.id); return }
+        if (lastCluster) {
+          if (lastCluster.id < 0) {
+            // Search pseudo-cluster: -id is the real photo_id
+            openViewer(-lastCluster.id); return
+          }
+          const cluster = findCluster(lastCluster.id)
+          if (cluster?.best_photo_id) { openViewer(cluster.best_photo_id); return }
         }
       }
-    }
 
-    if (tabId === 'table') {
-      const clusterRefs = selectedRefs.filter((r) => r.type === 'cluster')
-      if (clusterRefs.length > 0) {
-        // Split real clusters (id > 0) from search pseudo-clusters (id < 0)
-        const realRefs = clusterRefs.filter((r) => r.id > 0)
-        const searchRefs = clusterRefs.filter((r) => r.id < 0)
-
-        const photoRefs: Array<{ type: 'photo'; id: number }> = []
-        let lastPhotoId: number | null = null
-        let lastClusterId: number | null = null
-
-        // Search pseudo-clusters: photo_id = -id
-        for (const ref of searchRefs) {
-          const pid = -ref.id
-          photoRefs.push({ type: 'photo', id: pid })
-          lastPhotoId = pid
-        }
-
-        // Real clusters: lazy-fetch photo_ids from API
-        if (realRefs.length > 0 && clusters.length) {
-          try {
-            const clusterIds = realRefs.map((r) => r.id)
-            const photoIdsMap = await api.getClusterPhotoIds(clusterIds)
-            for (const ref of realRefs) {
-              const pids = photoIdsMap[ref.id] ?? []
-              for (const pid of pids) {
-                photoRefs.push({ type: 'photo', id: pid })
-                lastPhotoId = pid
-              }
-              if (pids.length > 0) lastClusterId = ref.id
-            }
-          } catch {
-            // Fall through to tab switch
+      if (tabId === 'gallery' && lastPhoto) {
+        const { searchQuery, activeClusterId } = useUIStore.getState()
+        if (searchQuery) {
+          // Search mode: select the pseudo-cluster for this photo (id = -photoId)
+          const pseudoId = -lastPhoto.id
+          selStore.selectOne({ type: 'cluster', id: pseudoId })
+          useUIStore.getState().setActiveCluster(pseudoId, lastPhoto.id)
+        } else if (activeClusterId && activeClusterId > 0 && clusters.length) {
+          const cluster = findCluster(activeClusterId)
+          if (cluster) {
+            selStore.selectOne({ type: 'cluster', id: cluster.id })
+            useUIStore.getState().setActiveCluster(cluster.id, cluster.best_photo_id ?? null)
           }
         }
+      }
 
-        if (photoRefs.length > 0) {
-          selStore.selectMany(photoRefs)
-          if (lastPhotoId) useUIStore.getState().setActivePhoto(lastPhotoId, lastClusterId)
+      if (tabId === 'table') {
+        const clusterRefs = selectedRefs.filter((r) => r.type === 'cluster')
+        if (clusterRefs.length > 0) {
+          // Split real clusters (id > 0) from search pseudo-clusters (id < 0)
+          const realRefs = clusterRefs.filter((r) => r.id > 0)
+          const searchRefs = clusterRefs.filter((r) => r.id < 0)
+
+          const photoRefs: Array<{ type: 'photo'; id: number }> = []
+          let lastPhotoId: number | null = null
+          let lastClusterId: number | null = null
+
+          // Search pseudo-clusters: photo_id = -id
+          for (const ref of searchRefs) {
+            const pid = -ref.id
+            photoRefs.push({ type: 'photo', id: pid })
+            lastPhotoId = pid
+          }
+
+          // Real clusters: lazy-fetch photo_ids from API
+          if (realRefs.length > 0 && clusters.length) {
+            try {
+              const clusterIds = realRefs.map((r) => r.id)
+              const photoIdsMap = await api.getClusterPhotoIds(clusterIds)
+              for (const ref of realRefs) {
+                const pids = photoIdsMap[ref.id] ?? []
+                for (const pid of pids) {
+                  photoRefs.push({ type: 'photo', id: pid })
+                  lastPhotoId = pid
+                }
+                if (pids.length > 0) lastClusterId = ref.id
+              }
+            } catch {
+              // Fall through to tab switch
+            }
+          }
+
+          if (photoRefs.length > 0) {
+            selStore.selectMany(photoRefs)
+            if (lastPhotoId) useUIStore.getState().setActivePhoto(lastPhotoId, lastClusterId)
+          }
         }
       }
-    }
 
-    setTab(tabId)
+      setTab(tabId)
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return
+      throw e
+    }
   }
 
   return (
@@ -246,13 +256,14 @@ export function Topbar() {
           )}
           {/* Category dropdown */}
           {showDropdown && hasFilteredCategories && (
-            <div className="absolute top-full left-0 mt-1 w-56 max-h-72 overflow-y-auto bg-neutral-800 border border-neutral-700 rounded shadow-lg z-50">
+            <div role="listbox" className="absolute top-full left-0 mt-1 w-56 max-h-72 overflow-y-auto bg-neutral-800 border border-neutral-700 rounded shadow-lg z-50">
               {filteredCategories.content.length > 0 && (
                 <div>
                   <div className="px-2 py-1 text-[10px] text-neutral-500 uppercase tracking-wider">Content</div>
                   {filteredCategories.content.map(({ key, label }) => (
                     <button
                       key={key}
+                      role="option"
                       className="w-full text-left px-2 py-1 text-xs text-neutral-200 hover:bg-neutral-700 flex justify-between items-center"
                       onMouseDown={(e) => {
                         e.preventDefault()
@@ -275,6 +286,7 @@ export function Topbar() {
                   {filteredCategories.technical.map(({ key, label }) => (
                     <button
                       key={key}
+                      role="option"
                       className="w-full text-left px-2 py-1 text-xs text-neutral-200 hover:bg-neutral-700 flex justify-between items-center"
                       onMouseDown={(e) => {
                         e.preventDefault()

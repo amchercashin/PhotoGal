@@ -40,6 +40,7 @@ export const ClusterCell = memo(function ClusterCell({
           : 'ring-1 ring-transparent hover:ring-neutral-600',
         isMarked ? 'opacity-50' : '',
       ].join(' ')}
+      aria-label={`Cluster: ${cluster.photo_count} photo${cluster.photo_count !== 1 ? 's' : ''}${cluster.avg_timestamp ? ', ' + new Date(cluster.avg_timestamp).toLocaleDateString() : ''}`}
       onClick={onSelect}
       onDoubleClick={onDoubleClick}
     >

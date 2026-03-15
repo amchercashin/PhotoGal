@@ -3,9 +3,10 @@
  * Supports L3 face analysis via "Include face analysis" checkbox.
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../api/client'
+import { toast } from '../../store/toast'
 
 interface Props {
   photoIds: number[]
@@ -36,6 +37,11 @@ const LEVEL_DESCRIPTIONS: Record<number, Record<string, string>> = {
 export function AnalyzeDialog({ photoIds, onClose, onDone }: Props) {
   const qc = useQueryClient()
   const [includeFaces, setIncludeFaces] = useState(true)
+  const dialogRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    dialogRef.current?.focus()
+  }, [])
 
   // Stable sorted copy: used for both cache key and query to ensure consistency
   const sortedPhotoIds = useMemo(
@@ -86,15 +92,20 @@ export function AnalyzeDialog({ photoIds, onClose, onDone }: Props) {
       qc.invalidateQueries({ queryKey: ['pipeline-status'] })
       onDone()
     } catch (e: any) {
-      console.error(e)
+      toast.error(e.message ?? 'Failed to start analysis')
     }
   }
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-neutral-900 border border-neutral-700 rounded-lg p-5 w-80 shadow-xl"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        className="bg-neutral-900 border border-neutral-700 rounded-lg p-5 w-80 shadow-xl outline-none"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}
       >
         <h2 className="text-white font-semibold text-sm mb-3">Analyze Photos</h2>
 

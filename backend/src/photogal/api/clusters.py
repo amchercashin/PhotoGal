@@ -52,18 +52,6 @@ def get_cluster(cluster_id: int, db: Database = Depends(get_db)):
     }
 
 
-class MovePhotoRequest(BaseModel):
-    photo_id: int
-    target_cluster_id: int
-
-
-@router.post("/move")
-def move_photo_to_cluster(req: MovePhotoRequest, db: Database = Depends(get_db)):
-    db.move_photo_to_cluster(req.photo_id, req.target_cluster_id)
-    db.commit()
-    return {"ok": True}
-
-
 def _cluster_row_light(c) -> dict:
     """Lightweight cluster serialization — no photo_ids (fetched separately)."""
     def _safe(key, default=None):
@@ -82,7 +70,6 @@ def _cluster_row_light(c) -> dict:
         "avg_gps_lat": c["avg_gps_lat"],
         "avg_gps_lon": c["avg_gps_lon"],
         "location_city": c["location_city"],
-        "event_id": c["event_id"],
         "best_photo_blur": _safe("best_photo_blur"),
         "best_photo_exposure": _safe("best_photo_exposure"),
         "has_exact_duplicate": bool(_safe("has_exact_duplicate", 0)),

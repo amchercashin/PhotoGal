@@ -7,6 +7,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { open } from '@tauri-apps/plugin-dialog'
 import { api, type Source } from '../../api/client'
 import { useUIStore } from '../../store/ui'
+import { toast } from '../../store/toast'
 
 const isTauri = '__TAURI_INTERNALS__' in window
 
@@ -37,6 +38,7 @@ export function Sidebar() {
       // Auto-start L0 scan for the newly added source
       runLevel.mutate({ level: 0, source_id: source.id })
     },
+    onError: (e: Error) => toast.error(e.message),
   })
 
   const deleteSource = useMutation({
@@ -47,6 +49,7 @@ export function Sidebar() {
       qc.invalidateQueries({ queryKey: ['clusters'] })
       qc.invalidateQueries({ queryKey: ['photos-table'] })
     },
+    onError: (e: Error) => toast.error(e.message),
   })
 
   async function handleAddSource() {

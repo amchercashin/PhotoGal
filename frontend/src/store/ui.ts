@@ -17,6 +17,7 @@ interface UIState {
   // Cross-tab unified selection — the single source of truth for "what's selected"
   activePhotoId: number | null
   activeClusterId: number | null
+  activePerson: number | null
 
   // Gallery tab preserved state
   galleryScrollOffset: number
@@ -48,6 +49,7 @@ interface UIState {
   // Unified selection setters
   setActivePhoto: (photoId: number | null, clusterId?: number | null) => void
   setActiveCluster: (clusterId: number | null, photoId?: number | null) => void
+  setActivePerson: (id: number | null) => void
 
   // Per-tab state setters
   setGalleryScrollOffset: (offset: number) => void
@@ -67,6 +69,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 
   activePhotoId: null,
   activeClusterId: null,
+  activePerson: null,
 
   galleryScrollOffset: 0,
 
@@ -107,6 +110,7 @@ export const useUIStore = create<UIState>((set, get) => ({
     activeClusterId: clusterId,
     ...(photoId !== undefined ? { activePhotoId: photoId } : {}),
   }),
+  setActivePerson: (id) => set({ activePerson: id }),
 
   setGalleryScrollOffset: (offset) => set({ galleryScrollOffset: offset }),
   setTablePage: (page) => set({ tablePage: page }),

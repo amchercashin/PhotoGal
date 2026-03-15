@@ -11,6 +11,7 @@ import { PeopleGrid } from './components/people/PeopleGrid'
 import { useUIStore } from './store/ui'
 import { api } from './api/client'
 import { usePipelineSync } from './hooks/usePipelineSync'
+import { ToastContainer } from './components/shared/Toast'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 10_000 } },
@@ -66,6 +67,7 @@ function AppContent() {
           </div>
         </main>
       </div>
+      <ToastContainer />
     </div>
   )
 }

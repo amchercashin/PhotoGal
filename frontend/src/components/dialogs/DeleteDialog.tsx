@@ -5,8 +5,9 @@
  * Files are moved to system Trash.
  */
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../../api/client'
+import { toast } from '../../store/toast'
 
 interface Props {
   photoIds: number[]
@@ -18,6 +19,16 @@ export function DeleteDialog({ photoIds, onClose, onDone }: Props) {
   const [step, setStep] = useState<1 | 2>(1)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    dialogRef.current?.focus()
+  }, [])
+
+  useEffect(() => {
+    return () => { if (timerRef.current) clearTimeout(timerRef.current) }
+  }, [])
 
   async function handleDelete() {
     setDeleting(true)
@@ -26,12 +37,14 @@ export function DeleteDialog({ photoIds, onClose, onDone }: Props) {
       const result = await api.deletePhotosBulk(photoIds)
       if (result.errors && result.errors.length > 0) {
         setError(`Deleted ${result.trashed} files, but ${result.errors.length} failed: ${result.errors.slice(0, 3).join('; ')}`)
-        setTimeout(onDone, 3000)
+        timerRef.current = setTimeout(onDone, 3000)
       } else {
         onDone()
       }
     } catch (e: any) {
-      setError(e.message ?? 'Unknown error')
+      const msg = e.message ?? 'Unknown error'
+      setError(msg)
+      toast.error(msg)
       setDeleting(false)
     }
   }
@@ -42,8 +55,13 @@ export function DeleteDialog({ photoIds, onClose, onDone }: Props) {
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-neutral-900 border border-neutral-700 rounded-lg p-5 w-96 shadow-xl"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        className="bg-neutral-900 border border-neutral-700 rounded-lg p-5 w-96 shadow-xl outline-none"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}
       >
         {step === 1 && (
           <>

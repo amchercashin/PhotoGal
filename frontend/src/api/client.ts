@@ -9,11 +9,12 @@ export async function initApi() {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
+    signal,
   })
   if (!res.ok) {
     const text = await res.text()
@@ -24,6 +25,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 const get = <T>(path: string) => request<T>('GET', path)
 const post = <T>(path: string, body: unknown) => request<T>('POST', path, body)
+const patch = <T>(path: string, body: unknown) => request<T>('PATCH', path, body)
 const del = <T>(path: string) => request<T>('DELETE', path)
 
 // --- Types ---
@@ -53,7 +55,6 @@ export interface Photo {
   quality_aesthetic: number | null
   face_count: number | null
   is_technical: number
-  semantic_tags: string | null
   content_category: string | null
   rank_in_cluster: number | null
   user_decision: 'keep' | 'delete' | 'archive' | null
@@ -73,7 +74,6 @@ export interface Cluster {
   avg_gps_lat: number | null
   avg_gps_lon: number | null
   location_city: string | null
-  event_id: number | null
   photo_ids?: number[]
   photos?: Photo[]
   best_photo_blur: number | null
@@ -187,6 +187,8 @@ export const api = {
     return get<PhotoListResult>(`/photos/?${q}`)
   },
   getPhoto: (id: number) => get<Photo>(`/photos/${id}`),
+  updatePhoto: (id: number, data: { user_decision: string | null }) =>
+    patch<{ ok: boolean }>(`/photos/${id}`, data),
   getStats: () => get<Stats>('/photos/stats'),
   thumbnailUrl: (id: number, version?: string | null) => `${BASE}/photos/${id}/thumbnail${version ? `?v=${version.slice(0, 8)}` : ''}`,
   fullUrl: (id: number) => `${BASE}/photos/${id}/full`,
@@ -240,14 +242,20 @@ export const api = {
     post<SearchResponse>('/search/', { query, limit }),
 
   // Persons & Faces
-  listPersons: (includeHidden = false) =>
-    get<Person[]>(`/persons/?include_hidden=${includeHidden}`),
+  listPersons: (params?: { include_hidden?: boolean; limit?: number; offset?: number }) => {
+    const p = new URLSearchParams()
+    if (params?.include_hidden) p.set('include_hidden', 'true')
+    if (params?.limit) p.set('limit', String(params.limit))
+    if (params?.offset) p.set('offset', String(params.offset))
+    const qs = p.toString()
+    return get<Person[]>(`/persons/${qs ? '?' + qs : ''}`)
+  },
 
   getPersonPhotos: (personId: number) =>
     get<{ photo_ids: number[]; total: number }>(`/persons/${personId}/photos`),
 
   updatePerson: (personId: number, data: { name?: string; hidden?: boolean }) =>
-    request<{ ok: boolean }>('PATCH', `/persons/${personId}`, data),
+    patch<{ ok: boolean }>(`/persons/${personId}`, data),
 
   getFacesForPhoto: (photoId: number) =>
     get<FaceOnPhoto[]>(`/faces/photo/${photoId}`),

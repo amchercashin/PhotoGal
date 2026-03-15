@@ -3,10 +3,14 @@
 Used by analyzer.py to re-rank clusters after CLIP embeddings are computed.
 """
 
+import logging
+
 import numpy as np
 
 from photogal.config import Config
 from photogal.db import Database
+
+logger = logging.getLogger(__name__)
 
 
 def _rank_clusters(db: Database, config: Config | None = None) -> int:
@@ -34,6 +38,8 @@ def _rank_clusters(db: Database, config: Config | None = None) -> int:
                 penalty += 1.0
             scored.append((aesthetic - penalty, p["id"], p["original_filename"]))
         scored.sort(reverse=True)
+        if not scored:
+            continue
         for rank, (_, pid, _) in enumerate(scored, start=1):
             rank_updates.append((rank, pid))
         _, best_id, best_filename = scored[0]

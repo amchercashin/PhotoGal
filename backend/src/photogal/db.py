@@ -24,16 +24,16 @@ PHOTO_UPDATABLE_COLS = frozenset({
     "perceptual_hash", "exif_date", "exif_gps_lat", "exif_gps_lon",
     "exif_camera", "exif_orientation", "exif_width", "exif_height",
     "location_country", "location_city", "location_district",
-    "clip_embedding", "rank_in_event", "user_decision",
-    "user_cluster_override", "semantic_tags", "semantic_group_id",
+    "clip_embedding", "user_decision",
+    "user_cluster_override",
     "sync_status", "is_exact_duplicate", "current_path",
-    "moved_at", "deleted_at", "archived_at", "source_id",
+    "source_id",
 })
 
 CLUSTER_UPDATABLE_COLS = frozenset({
     "name", "best_photo_id", "photo_count", "type",
     "avg_timestamp", "avg_gps_lat", "avg_gps_lon",
-    "location_city", "event_id",
+    "location_city",
 })
 
 
@@ -120,12 +120,8 @@ CREATE TABLE IF NOT EXISTS photos (
     original_filename TEXT NOT NULL,
     current_path TEXT,
     file_size INTEGER,
-    moved_at TEXT,
-    deleted_at TEXT,
-    archived_at TEXT,
     processing_level INTEGER DEFAULT 0,
     cluster_id INTEGER REFERENCES clusters(id),
-    event_id INTEGER REFERENCES events(id),
     -- EXIF
     exif_date TEXT,
     exif_gps_lat REAL,
@@ -147,12 +143,10 @@ CREATE TABLE IF NOT EXISTS photos (
     face_count INTEGER,
     -- Ranking
     rank_in_cluster INTEGER,
-    rank_in_event INTEGER,
     -- User decisions
     user_decision TEXT,              -- keep | delete | archive | null
     user_cluster_override INTEGER,
-    -- Semantic layer (Level 3)
-    semantic_tags TEXT,              -- JSON array
+    -- Classification (Level 2)
     content_category TEXT,           -- people | nature | food | travel | architecture | other
     is_technical INTEGER DEFAULT 0,
     --
@@ -178,19 +172,6 @@ CREATE TABLE IF NOT EXISTS clusters (
     avg_gps_lat REAL,
     avg_gps_lon REAL,
     location_city TEXT,
-    event_id INTEGER REFERENCES events(id),
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    start_date TEXT,
-    end_date TEXT,
-    gps_lat REAL,
-    gps_lon REAL,
-    cluster_count INTEGER DEFAULT 0,
-    description TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -266,15 +247,12 @@ _MIGRATIONS = [
     ("photos", "location_country", "TEXT"),
     ("photos", "location_city", "TEXT"),
     ("photos", "location_district", "TEXT"),
-    ("photos", "archived_at", "TEXT"),
     ("photos", "user_decision", "TEXT"),
     ("photos", "user_cluster_override", "INTEGER"),
-    ("photos", "semantic_tags", "TEXT"),
     ("photos", "content_category", "TEXT"),
     ("photos", "is_technical", "INTEGER DEFAULT 0"),
     ("clusters", "location_city", "TEXT"),
     ("photos", "sync_status", "TEXT DEFAULT 'ok'"),
-    ("photos", "semantic_group_id", "INTEGER"),
     ("photos", "is_exact_duplicate", "INTEGER DEFAULT 0"),
 ]
 
@@ -412,6 +390,7 @@ class Database:
         self.conn.execute("PRAGMA cache_size=-32000")  # 32MB cache
         self.conn.executescript(SCHEMA)
         self._migrate()
+        self._drop_dead_columns()
         self.conn.commit()
 
     def _migrate(self):
@@ -455,6 +434,27 @@ class Database:
                 "SELECT id, clip_embedding FROM photos WHERE clip_embedding IS NOT NULL"
             )
             self.conn.execute("UPDATE photos SET clip_embedding = NULL")
+
+    def _drop_dead_columns(self):
+        """Remove dead columns from schema (one-time migration)."""
+        dead_cols = {
+            "photos": [
+                "semantic_tags", "semantic_group_id", "rank_in_event",
+                "deleted_at", "moved_at", "archived_at", "event_id",
+            ],
+            "clusters": ["event_id"],
+        }
+        self.conn.execute("PRAGMA foreign_keys=OFF")
+        for table, cols in dead_cols.items():
+            existing = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            for col in cols:
+                if col in existing:
+                    self.conn.execute(f"ALTER TABLE {table} DROP COLUMN {col}")
+        self.conn.execute("DROP TABLE IF EXISTS events")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_photos_category ON photos(content_category)")
+        self.conn.execute("PRAGMA foreign_keys=ON")
+        self.conn.execute("PRAGMA foreign_key_check")
+        self.conn.commit()
 
     def close(self):
         self.conn.close()
@@ -864,13 +864,6 @@ class Database:
         ).fetchall()
         return {r["user_decision"]: r["cnt"] for r in rows}
 
-    def move_photo_to_cluster(self, photo_id: int, cluster_id: int):
-        self.conn.execute(
-            "UPDATE photos SET cluster_id = ?, user_cluster_override = ?, "
-            "updated_at = datetime('now') WHERE id = ?",
-            (cluster_id, cluster_id, photo_id),
-        )
-
     def delete_photos_bulk(self, photo_ids: list[int]):
         with self.conn.transaction():
             for batch in _chunks(photo_ids, 900):
@@ -1018,13 +1011,13 @@ class Database:
                 [person_id] + chunk,
             )
 
-    def list_persons(self, include_hidden: bool = False) -> list[dict]:
-        """List persons sorted by face_count DESC."""
+    def list_persons(self, include_hidden: bool = False, limit: int = 100, offset: int = 0) -> list[dict]:
+        """List persons sorted by face_count DESC with pagination."""
         sql = "SELECT * FROM persons"
         if not include_hidden:
             sql += " WHERE hidden = 0"
-        sql += " ORDER BY face_count DESC"
-        return [dict(r) for r in self.conn.execute(sql).fetchall()]
+        sql += " ORDER BY face_count DESC LIMIT ? OFFSET ?"
+        return [dict(r) for r in self.conn.execute(sql, (limit, offset)).fetchall()]
 
     def rename_person(self, person_id: int, name: str):
         """Rename a person."""
@@ -1061,6 +1054,12 @@ class Database:
             ")"
         )
         self.conn.execute("DELETE FROM persons WHERE face_count = 0")
+        # NULL out invalid representative_face_id references
+        self.conn.execute("""
+            UPDATE persons SET representative_face_id = NULL
+            WHERE representative_face_id IS NOT NULL
+            AND representative_face_id NOT IN (SELECT id FROM faces)
+        """)
         self.commit()
 
     def get_category_counts(self) -> dict[str, int]:

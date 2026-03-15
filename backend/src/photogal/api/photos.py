@@ -4,14 +4,17 @@ import os
 import time
 from pathlib import Path
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from photogal.api.deps import get_db
 from photogal.config import get_thumbnail_cache_dir
-from photogal.db import Database, resolve_photo_path
-from photogal.thumbnails import generate_thumbnail
+from photogal.db import Database, _chunks, resolve_photo_path
+from photogal.thumbnails import generate_thumbnail, get_thumbnail_path
+from photogal.trash import trash_files
 
 router = APIRouter(prefix="/photos", tags=["photos"])
 
@@ -84,6 +87,8 @@ def get_stats(db: Database = Depends(get_db)):
 
 @router.get("/ids-by-level/{level}")
 def get_ids_by_level(level: int, db: Database = Depends(get_db)):
+    if level < 0 or level > 3:
+        raise HTTPException(status_code=400, detail="Level must be 0-3")
     rows = db.conn.execute(
         "SELECT id, cluster_id FROM photos WHERE processing_level = ?", (level,)
     ).fetchall()
@@ -144,15 +149,14 @@ def bulk_delete_photos(req: BulkDeleteRequest, db: Database = Depends(get_db)):
     if not req.photo_ids:
         return {"deleted": 0, "trashed": 0, "errors": []}
 
-    from photogal.trash import trash_files
-    from photogal.thumbnails import get_thumbnail_path
-
-    # 1. Collect file paths and content hashes before DB cleanup
-    placeholders = ",".join("?" * len(req.photo_ids))
-    rows = db.conn.execute(
-        f"SELECT id, original_path, current_path, content_hash FROM photos WHERE id IN ({placeholders})",
-        req.photo_ids,
-    ).fetchall()
+    # 1. Collect file paths and content hashes before DB cleanup (batch by 900 for SQLite limit)
+    rows = []
+    for batch in _chunks(req.photo_ids, 900):
+        placeholders = ",".join("?" * len(batch))
+        rows.extend(db.conn.execute(
+            f"SELECT id, original_path, current_path, content_hash FROM photos WHERE id IN ({placeholders})",
+            batch,
+        ).fetchall())
 
     file_paths = [resolve_photo_path(r) for r in rows]
 
@@ -197,6 +201,20 @@ def get_photo_table_position(
         filter_category=filter_category,
         page_size=page_size,
     )
+
+
+class UpdatePhotoRequest(BaseModel):
+    user_decision: Literal["keep", "delete", "archive"] | None = None
+
+
+@router.patch("/{photo_id}")
+def update_photo(photo_id: int, req: UpdatePhotoRequest, db: Database = Depends(get_db)):
+    photo = db.get_photo(photo_id)
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    db.update_photo(photo_id, user_decision=req.user_decision)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/{photo_id}")
@@ -300,7 +318,6 @@ def _photo_row(p) -> dict:
         "quality_aesthetic": p["quality_aesthetic"],
         "face_count": p["face_count"],
         "is_technical": p["is_technical"],
-        "semantic_tags": p["semantic_tags"],
         "content_category": p["content_category"],
         "rank_in_cluster": p["rank_in_cluster"],
         "user_decision": p["user_decision"],
