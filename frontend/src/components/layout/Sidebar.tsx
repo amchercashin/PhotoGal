@@ -27,6 +27,7 @@ export function Sidebar() {
     mutationFn: ({ level, source_id }: { level: number; source_id?: number }) =>
       api.runLevel(level, source_id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['pipeline-status'] }),
+    onError: (e: Error) => toast.error(`Scan failed: ${e.message}`),
   })
 
   const addSource = useMutation({
@@ -54,12 +55,17 @@ export function Sidebar() {
 
   async function handleAddSource() {
     if (isTauri) {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: 'Select photo folder',
-      })
-      if (selected) addSource.mutate(selected)
+      try {
+        const selected = await open({
+          directory: true,
+          multiple: false,
+          title: 'Select photo folder',
+        })
+        if (selected) addSource.mutate(selected)
+      } catch (e) {
+        console.error('[Sidebar] dialog error:', e)
+        toast.error('Could not open folder picker')
+      }
     } else {
       setShowAddSource(!showAddSource)
     }

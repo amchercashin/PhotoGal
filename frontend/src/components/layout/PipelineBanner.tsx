@@ -68,7 +68,10 @@ export function PipelineBanner() {
     if (remaining > 0) etaText = formatEta(remaining)
   }
 
-  const isIndeterminate = status.stage === 'downloading_model' || status.stage === 'loading_model'
+  const isIndeterminate = status.stage === 'downloading_model'
+    || status.stage === 'loading_model'
+    || status.stage === 'starting'
+    || (status.progress === 0 && status.total > 0)
 
   return (
     <div className="bg-blue-950/80 border-b border-blue-800/50 px-4 py-1.5 flex items-center gap-3 text-xs shrink-0">

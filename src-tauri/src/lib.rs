@@ -1,9 +1,8 @@
+use std::process::{Child, Command};
 use std::sync::Mutex;
 use tauri::{Manager, State};
-use tauri_plugin_shell::ShellExt;
-use tauri_plugin_shell::process::CommandChild;
 
-pub struct BackendProcess(Mutex<Option<CommandChild>>);
+pub struct BackendProcess(Mutex<Option<Child>>);
 
 /// Find a free TCP port
 fn find_free_port() -> u16 {
@@ -34,6 +33,30 @@ fn wait_for_backend(port: u16, timeout_ms: u64) {
     }
 }
 
+/// Find the sidecar binary path in bundled Resources or dev sidecar/ dir
+fn find_sidecar_path(app: &tauri::App) -> Option<std::path::PathBuf> {
+    // Production: bundled in Resources/sidecar/
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let bin = resource_dir.join("sidecar").join("photogal-server-bin");
+        if bin.exists() {
+            return Some(bin);
+        }
+        // Flat layout: Tauri may flatten resources into resource_dir root
+        let bin = resource_dir.join("photogal-server-bin");
+        if bin.exists() {
+            return Some(bin);
+        }
+    }
+    // Dev: sidecar/ directory next to src-tauri
+    let dev_bin = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("sidecar")
+        .join("photogal-server-bin");
+    if dev_bin.exists() {
+        return Some(dev_bin);
+    }
+    None
+}
+
 #[tauri::command]
 fn get_backend_port(state: State<'_, Mutex<u16>>) -> u16 {
     *state.lock().unwrap()
@@ -47,7 +70,7 @@ fn reveal_in_finder(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
+        Command::new("open")
             .arg("-R")
             .arg(&path)
             .spawn()
@@ -67,55 +90,26 @@ pub fn run() {
         .manage(BackendProcess(Mutex::new(None)))
         .manage(Mutex::new(port))
         .setup(move |app| {
-            // Select GPU sidecar if available, otherwise CPU sidecar
-            let gpu_sidecar_path = app
-                .path()
-                .app_data_dir()
-                .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".photogal"))
-                .join("sidecars")
-                .join("photogal-server-gpu");
-            let sidecar_name = if gpu_sidecar_path.exists() {
-                eprintln!("Using GPU sidecar");
-                "photogal-server-gpu"
+            if let Some(sidecar_bin) = find_sidecar_path(app) {
+                eprintln!("Launching sidecar: {:?}", sidecar_bin);
+                let sidecar_dir = sidecar_bin.parent().unwrap().to_path_buf();
+                match Command::new(&sidecar_bin)
+                    .current_dir(&sidecar_dir)
+                    .args(["serve", "--port", &port_copy.to_string()])
+                    .spawn()
+                {
+                    Ok(child) => {
+                        let state = app.state::<BackendProcess>();
+                        *state.0.lock().unwrap() = Some(child);
+                        let p = port_copy;
+                        std::thread::spawn(move || wait_for_backend(p, 60_000));
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to start sidecar: {e}");
+                    }
+                }
             } else {
-                "photogal-server"
-            };
-
-            let sidecar_result = app
-                .shell()
-                .sidecar(sidecar_name)
-                .map(|cmd| cmd.args(["serve", "--port", &port_copy.to_string()]))
-                .and_then(|cmd| cmd.spawn());
-
-            match sidecar_result {
-                Ok((mut rx, child)) => {
-                    let state = app.state::<BackendProcess>();
-                    *state.0.lock().unwrap() = Some(child);
-
-                    let p = port_copy;
-                    std::thread::spawn(move || wait_for_backend(p, 60_000));
-
-                    // Drain sidecar output
-                    tauri::async_runtime::spawn(async move {
-                        use tauri_plugin_shell::process::CommandEvent;
-                        while let Some(event) = rx.recv().await {
-                            match event {
-                                CommandEvent::Stdout(line) => {
-                                    eprintln!("[backend] {}", String::from_utf8_lossy(&line))
-                                }
-                                CommandEvent::Stderr(line) => {
-                                    eprintln!("[backend:err] {}", String::from_utf8_lossy(&line))
-                                }
-                                CommandEvent::Terminated(_) => break,
-                                _ => {}
-                            }
-                        }
-                    });
-                }
-                Err(e) => {
-                    eprintln!("Failed to start backend sidecar: {e}");
-                    // In dev mode, backend runs separately — continue anyway
-                }
+                eprintln!("Sidecar not found — assuming dev mode (backend runs separately)");
             }
 
             Ok(())
@@ -124,7 +118,7 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if let Some(state) = window.try_state::<BackendProcess>() {
                     if let Ok(mut guard) = state.0.lock() {
-                        if let Some(child) = guard.take() {
+                        if let Some(mut child) = guard.take() {
                             let _ = child.kill();
                         }
                     }

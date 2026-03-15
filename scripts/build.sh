@@ -54,23 +54,26 @@ fi
 
 info "Environment OK"
 
-# --- 2. Build Python sidecar ---
-info "Building Python sidecar (PyInstaller)..."
+# --- 2. Build Python sidecar (onedir mode — fast startup) ---
+info "Building Python sidecar (PyInstaller onedir)..."
 cd "$BACKEND"
 .venv/bin/python -m PyInstaller photogal-server.spec --clean --noconfirm
-SIDECAR="$BACKEND/dist/photogal-server"
+SIDECAR_DIR="$BACKEND/dist/photogal-server"
+SIDECAR_BIN="$SIDECAR_DIR/photogal-server-bin"
 
-if [ ! -f "$SIDECAR" ]; then
-    error "PyInstaller failed — $SIDECAR not found"
+if [ ! -f "$SIDECAR_BIN" ]; then
+    error "PyInstaller failed — $SIDECAR_BIN not found"
     exit 2
 fi
-SIDECAR_SIZE=$(du -sh "$SIDECAR" | cut -f1)
-info "Sidecar built: $SIDECAR ($SIDECAR_SIZE)"
+SIDECAR_SIZE=$(du -sh "$SIDECAR_DIR" | cut -f1)
+info "Sidecar built: $SIDECAR_DIR ($SIDECAR_SIZE)"
 
-# --- 3. Copy sidecar to Tauri binaries ---
-info "Copying sidecar to Tauri binaries..."
-mkdir -p "$TAURI/binaries"
-cp "$SIDECAR" "$TAURI/binaries/photogal-server-aarch64-apple-darwin"
+# --- 3. Copy sidecar directory to Tauri resources ---
+info "Copying sidecar to Tauri resources..."
+SIDECAR_DEST="$TAURI/sidecar"
+rm -rf "$SIDECAR_DEST"
+cp -R "$SIDECAR_DIR" "$SIDECAR_DEST"
+chmod +x "$SIDECAR_DEST/photogal-server-bin"
 
 # --- 4. Build frontend ---
 info "Building frontend..."

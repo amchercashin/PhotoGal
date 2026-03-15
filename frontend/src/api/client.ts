@@ -10,14 +10,21 @@ export async function initApi() {
 }
 
 async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-    signal,
-  })
+  let res: Response
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      signal,
+    })
+  } catch (err) {
+    console.error(`[API] ${method} ${path} network error:`, err)
+    throw new Error(`Network error: ${method} ${path} — ${err instanceof Error ? err.message : err}`)
+  }
   if (!res.ok) {
     const text = await res.text()
+    console.error(`[API] ${method} ${path} → ${res.status}:`, text)
     throw new Error(`${method} ${path} → ${res.status}: ${text}`)
   }
   return res.json()

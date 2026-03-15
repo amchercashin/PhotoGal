@@ -57,11 +57,12 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Local-only server: allow all origins.
+    # Tauri WKWebView on macOS may send Origin: null (opaque origin from
+    # custom tauri:// scheme), which doesn't match named origins.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173",
-                        "tauri://localhost", "https://tauri.localhost"],
-        allow_credentials=True,
+        allow_origins=["*"],
         allow_methods=["*"],
         allow_headers=["*"],
     )

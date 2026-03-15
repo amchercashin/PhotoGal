@@ -28,8 +28,8 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": [
-      "binaries/photogal-server"
+    "resources": [
+      "sidecar"
     ],
     "icon": [
       "icons/32x32.png",

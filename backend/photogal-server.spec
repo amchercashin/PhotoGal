@@ -125,14 +125,19 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
-    [],
-    name="photogal-server",
+    exclude_binaries=True,
+    name="photogal-server-bin",
     debug=False,
     bootloader_ignore_signals=False,
     strip=True,
     upx=False,  # UPX breaks some torch binaries on macOS
     console=True,
     target_arch="arm64",
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    name="photogal-server",
 )
