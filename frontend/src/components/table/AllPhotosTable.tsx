@@ -20,6 +20,7 @@ const COLUMNS = [
   { key: 'id', label: '#', width: 50 },
   { key: 'thumb', label: '', width: 52, noSort: true },
   { key: 'original_filename', label: 'Filename', width: 200 },
+  { key: 'original_path', label: 'Path', width: 200, noSort: true },
   { key: 'exif_date', label: 'Date', width: 140 },
   { key: 'exif_camera', label: 'Camera', width: 140 },
   { key: 'location_city', label: 'City', width: 100 },
@@ -274,6 +275,17 @@ export function AllPhotosTable() {
                     </div>
                   </td>
                   <td className="px-2 py-1 truncate max-w-0" style={{ maxWidth: 200 }}>{photo.original_filename}</td>
+                  <td
+                    className="px-2 py-1 text-neutral-500 truncate max-w-0 cursor-pointer hover:text-blue-400"
+                    style={{ maxWidth: 200 }}
+                    title={(photo.current_path || photo.original_path).replace(/\/[^/]+$/, '')}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      api.revealInFinder(photo.current_path || photo.original_path)
+                    }}
+                  >
+                    {(photo.current_path || photo.original_path).replace(/\/[^/]+$/, '').split('/').pop()}
+                  </td>
                   <td className="px-2 py-1 text-neutral-400 whitespace-nowrap">{photo.exif_date?.slice(0, 10)}</td>
                   <td className="px-2 py-1 text-neutral-400 truncate" style={{ maxWidth: 140 }}>{photo.exif_camera}</td>
                   <td className="px-2 py-1 text-neutral-400">{photo.location_city}</td>

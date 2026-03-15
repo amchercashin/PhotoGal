@@ -142,12 +142,42 @@ class BulkDeleteRequest(BaseModel):
 @router.post("/bulk-delete")
 def bulk_delete_photos(req: BulkDeleteRequest, db: Database = Depends(get_db)):
     if not req.photo_ids:
-        return {"deleted": 0}
+        return {"deleted": 0, "trashed": 0, "errors": []}
+
+    from photogal.trash import trash_files
+    from photogal.thumbnails import get_thumbnail_path
+
+    # 1. Collect file paths and content hashes before DB cleanup
+    placeholders = ",".join("?" * len(req.photo_ids))
+    rows = db.conn.execute(
+        f"SELECT id, original_path, current_path, content_hash FROM photos WHERE id IN ({placeholders})",
+        req.photo_ids,
+    ).fetchall()
+
+    file_paths = [resolve_photo_path(r) for r in rows]
+
+    # 2. Move files to Trash
+    trashed, errors = trash_files(file_paths)
+
+    # 3. Delete thumbnail files
+    cache_dir = get_thumbnail_cache_dir()
+    for r in rows:
+        content_hash = r["content_hash"]
+        original_path = r["original_path"]
+        thumb = get_thumbnail_path(cache_dir, content_hash=content_hash, original_path=original_path)
+        if thumb.exists():
+            try:
+                thumb.unlink()
+            except OSError:
+                pass
+
+    # 4. Clean up DB records
     db.delete_photos_bulk(req.photo_ids)
     db.cleanup_orphan_clusters()
     db.cleanup_orphaned_persons()
     db.commit()
-    return {"deleted": len(req.photo_ids)}
+
+    return {"deleted": len(req.photo_ids), "trashed": trashed, "errors": errors}
 
 
 @router.get("/{photo_id}/table-position")

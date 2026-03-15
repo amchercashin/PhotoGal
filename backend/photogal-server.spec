@@ -47,6 +47,7 @@ a = Analysis(
         "photogal.api.device",
         "photogal.device",
         "photogal.translate",
+        "photogal.trash",
         "photogal.profiling",
         # InsightFace + ONNX
         "insightface",

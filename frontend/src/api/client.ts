@@ -227,7 +227,7 @@ export const api = {
   },
 
   // Bulk operations
-  deletePhotosBulk: (photo_ids: number[]) => post<{ deleted: number }>('/photos/bulk-delete', { photo_ids }),
+  deletePhotosBulk: (photo_ids: number[]) => post<{ deleted: number; trashed: number; errors: string[] }>('/photos/bulk-delete', { photo_ids }),
   runMarked: (photo_ids: number[], targetLevel = 3) =>
     post<{ ok: boolean }>('/process/run-marked', { photo_ids, target_level: targetLevel }),
   estimateProcessing: (photo_count: number) =>
@@ -272,4 +272,12 @@ export const api = {
 
   // Health
   health: () => get<{ status: string }>('/health'),
+
+  // Tauri commands
+  revealInFinder: async (path: string) => {
+    if ('__TAURI_INTERNALS__' in window) {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('reveal_in_finder', { path })
+    }
+  },
 }
