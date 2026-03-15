@@ -17,7 +17,9 @@ AESTHETIC_URL = (
     "https://github.com/christophschuhmann/improved-aesthetic-predictor"
     "/raw/main/sac+logos+ava1-l14-linearMSE.pth"
 )
-AESTHETIC_CACHE_PATH = Path.home() / ".cache" / "photoapp" / "aesthetic-predictor-v2.pth"
+def _get_aesthetic_cache_path() -> Path:
+    from photogal.config import get_models_cache_dir
+    return get_models_cache_dir() / "aesthetic" / "aesthetic-predictor-v2.pth"
 
 
 class _AestheticMLP(nn.Module):
@@ -95,15 +97,16 @@ class CLIPModel:
 
     def _load_aesthetic_head(self) -> nn.Module:
         """Load LAION aesthetic predictor v2 (MLP head on CLIP embeddings)."""
-        if not AESTHETIC_CACHE_PATH.exists():
-            logger.info("Downloading aesthetic predictor to %s", AESTHETIC_CACHE_PATH)
-            AESTHETIC_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        cache_path = _get_aesthetic_cache_path()
+        if not cache_path.exists():
+            logger.info("Downloading aesthetic predictor to %s", cache_path)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
             import urllib.request
 
-            urllib.request.urlretrieve(AESTHETIC_URL, AESTHETIC_CACHE_PATH)
+            urllib.request.urlretrieve(AESTHETIC_URL, cache_path)
 
         head = _AestheticMLP()
-        state_dict = torch.load(AESTHETIC_CACHE_PATH, map_location=self.device, weights_only=True)
+        state_dict = torch.load(cache_path, map_location=self.device, weights_only=True)
         head.load_state_dict(state_dict)
         head.to(self.device)
         head.to(dtype=self.dtype)

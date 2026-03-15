@@ -28,11 +28,14 @@ class FaceModel:
 
     def __init__(self, providers: list[str] | None = None):
         from photogal.device import get_device_info
+        from photogal.config import get_models_cache_dir
         if providers is None:
             providers = get_device_info().get_onnx_providers()
-        log.info("Loading InsightFace buffalo_l model (providers=%s)...", providers)
+        root = str(get_models_cache_dir() / "insightface")
+        log.info("Loading InsightFace buffalo_l model (root=%s, providers=%s)...", root, providers)
         self._app = insightface.app.FaceAnalysis(
             name="buffalo_l",
+            root=root,
             providers=providers,
         )
         self._app.prepare(ctx_id=0, det_size=(640, 640))

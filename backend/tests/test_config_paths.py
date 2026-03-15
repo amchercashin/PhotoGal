@@ -43,6 +43,19 @@ def test_macos_thumbnail_dir_uses_application_support(tmp_path):
         from photogal.config import get_thumbnail_cache_dir as refreshed
 
         result = refreshed()
-        assert "Library/Application Support/com.photogal.desktop" in str(result)
-        assert result.name == ".thumbnails"
+        assert "Library/Caches/com.photogal.desktop" in str(result)
+        assert result.name == "thumbnails"
+        assert result.exists()
+
+
+def test_macos_cache_dir_uses_library_caches(tmp_path):
+    with patch("photogal.config.Path.home", return_value=tmp_path), \
+         patch.object(sys, "platform", "darwin"):
+        import importlib
+        import photogal.config
+        importlib.reload(photogal.config)
+        from photogal.config import get_cache_dir as refreshed
+
+        result = refreshed()
+        assert "Library/Caches/com.photogal.desktop" in str(result)
         assert result.exists()

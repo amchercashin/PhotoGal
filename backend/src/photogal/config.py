@@ -65,8 +65,25 @@ def get_db_path() -> Path:
     return _get_data_dir() / "photogal.db"
 
 
+def get_cache_dir() -> Path:
+    """Platform-aware cache directory (regenerable data)."""
+    if sys.platform == "darwin":
+        d = Path.home() / "Library" / "Caches" / "com.photogal.desktop"
+    else:
+        d = Path.home() / ".photogal" / "cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def get_thumbnail_cache_dir() -> Path:
-    """Default thumbnail cache (platform-aware)."""
-    d = _get_data_dir() / ".thumbnails"
+    """Thumbnail cache (platform-aware)."""
+    d = get_cache_dir() / "thumbnails"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def get_models_cache_dir() -> Path:
+    """Models cache directory."""
+    d = get_cache_dir() / "models"
     d.mkdir(parents=True, exist_ok=True)
     return d

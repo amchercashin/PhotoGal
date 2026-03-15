@@ -192,7 +192,8 @@ Tauri window
   └── WebView → React app (Vite build)
         └── HTTP calls → FastAPI (localhost:port)
               └── SQLite DB (~/Library/Application Support/com.photogal.desktop/photogal.db)
-              └── Thumbnails (~/Library/Application Support/com.photogal.desktop/.thumbnails/)
+              └── Thumbnails (~/Library/Caches/com.photogal.desktop/thumbnails/)
+              └── AI Models (~/Library/Caches/com.photogal.desktop/models/)
 
 Tauri Rust shell:
   - Launches Python sidecar (FastAPI) on startup
