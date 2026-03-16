@@ -189,7 +189,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'SilentlyContinue'
           $before = (Get-ChildItem -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-          foreach ($pattern in @("cufft*", "cusparse*", "cusolver*", "curand*", "nccl*", "nvtx*", "cutensor*", "nvrtc*", "nvJitLink*")) {
+          foreach ($pattern in @("cufft*", "cusparse*", "cusolver*", "curand*", "cudnn*", "nccl*", "nvtx*", "cutensor*", "nvrtc*", "nvJitLink*")) {
             Get-ChildItem -Recurse -Filter $pattern | Remove-Item -Force -ErrorAction SilentlyContinue
           }
           $ErrorActionPreference = 'Stop'
@@ -204,7 +204,7 @@ jobs:
 
       - name: Compress CUDA sidecar
         run: |
-          7z a -mx=5 -mmt=on "PhotoGal_${{ steps.version.outputs.VERSION }}_cuda-sidecar.zip" ".\backend\dist\photogal-server\*"
+          7z a -mx=7 -mmt=on "PhotoGal_${{ steps.version.outputs.VERSION }}_cuda-sidecar.zip" ".\backend\dist\photogal-server\*"
           $size = [math]::Round((Get-Item "PhotoGal_${{ steps.version.outputs.VERSION }}_cuda-sidecar.zip").Length / 1MB, 0)
           Write-Host "CUDA sidecar zip: $size MB"
           if ($size -gt 2000) {
