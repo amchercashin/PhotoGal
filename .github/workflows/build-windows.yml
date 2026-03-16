@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.5.4)"
+        required: true
 
 env:
   PYTHON_VERSION: "3.12"
@@ -13,6 +18,7 @@ jobs:
   build:
     runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
         variant: [cpu, cuda]
 
@@ -100,6 +106,15 @@ jobs:
           if (Test-Path "src-tauri\sidecar") { Remove-Item -Recurse -Force "src-tauri\sidecar" }
           Copy-Item -Recurse "backend\dist\photogal-server" "src-tauri\sidecar"
 
+      - name: Free disk space
+        run: |
+          Remove-Item -Recurse -Force "backend\dist" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "backend\build" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "backend\.venv" -ErrorAction SilentlyContinue
+          uv cache clean
+          $free = [math]::Round((Get-PSDrive D).Free / 1GB, 1)
+          Write-Host "Free disk space: $free GB"
+
       # --- Frontend ---
       - name: Install frontend dependencies
         working-directory: frontend
@@ -148,7 +163,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
           for ($i = 1; $i -le 30; $i++) {
             $result = gh release view $tag 2>&1
             if ($LASTEXITCODE -eq 0) {
@@ -172,4 +187,5 @@ jobs:
           } else {
             "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-setup.exe"
           }
-          gh release upload "${{ github.ref_name }}" $file --clobber
+          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
+          gh release upload $tag $file --clobber
