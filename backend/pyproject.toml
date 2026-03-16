@@ -24,6 +24,7 @@ dependencies = [
     "argostranslate>=1.9",
     "insightface>=0.7.3",
     "opencv-python-headless>=4.8",
+    "send2trash>=1.8",
     "coremltools>=7.0; sys_platform=='darwin'",
 ]
 
