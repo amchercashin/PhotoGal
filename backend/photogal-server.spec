@@ -1,24 +1,28 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for photogal-server sidecar binary."""
 
+import importlib.util
 import os
 import site
+import sys
 
-# Find site-packages for data files
-sp = site.getsitepackages()[0] if site.getsitepackages() else os.path.join(
-    os.path.dirname(os.path.abspath(".")), ".venv", "lib", "python3.12", "site-packages"
-)
+def _find_package_dir(package_name):
+    """Find package directory cross-platform."""
+    spec = importlib.util.find_spec(package_name)
+    if spec and spec.submodule_search_locations:
+        return spec.submodule_search_locations[0]
+    # Fallback to site-packages
+    sp = site.getsitepackages()[0] if site.getsitepackages() else ""
+    return os.path.join(sp, package_name)
 
 a = Analysis(
     ["photogal_entry.py"],
     pathex=["src"],
     binaries=[],
     datas=[
-        # reverse_geocoder needs its CSV data
-        (os.path.join(sp, "reverse_geocoder", "rg_cities1000.csv"), "reverse_geocoder"),
-        # open_clip needs BPE vocab and model configs
-        (os.path.join(sp, "open_clip", "bpe_simple_vocab_16e6.txt.gz"), "open_clip"),
-        (os.path.join(sp, "open_clip", "model_configs"), "open_clip/model_configs"),
+        (os.path.join(_find_package_dir("reverse_geocoder"), "rg_cities1000.csv"), "reverse_geocoder"),
+        (os.path.join(_find_package_dir("open_clip"), "bpe_simple_vocab_16e6.txt.gz"), "open_clip"),
+        (os.path.join(_find_package_dir("open_clip"), "model_configs"), "open_clip/model_configs"),
     ],
     hiddenimports=[
         # photogal modules (lazy-imported)
@@ -93,9 +97,12 @@ a = Analysis(
         "sklearn.utils._typedefs",
         "scipy.spatial",
         "scipy.spatial.ckdtree",
-        # PyTorch — ensure MPS backend is included on macOS
+        # PyTorch
         "torch",
+    ] + ([
+        # MPS backend only on macOS
         "torch.backends.mps",
+    ] if sys.platform == "darwin" else []) + [
         # argos-translate (offline ru→en translation)
         "argostranslate",
         "argostranslate.package",
@@ -129,10 +136,10 @@ exe = EXE(
     name="photogal-server-bin",
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,
-    upx=False,  # UPX breaks some torch binaries on macOS
+    strip=(sys.platform != "win32"),
+    upx=False,
     console=True,
-    target_arch="arm64",
+    **({"target_arch": "arm64"} if sys.platform == "darwin" else {}),
 )
 
 coll = COLLECT(
