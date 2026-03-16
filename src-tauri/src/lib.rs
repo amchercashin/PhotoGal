@@ -35,14 +35,15 @@ fn wait_for_backend(port: u16, timeout_ms: u64) {
 
 /// Find the sidecar binary path in bundled Resources or dev sidecar/ dir
 fn find_sidecar_path(app: &tauri::App) -> Option<std::path::PathBuf> {
+    let bin_name = format!("photogal-server-bin{}", std::env::consts::EXE_SUFFIX);
     // Production: bundled in Resources/sidecar/
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let bin = resource_dir.join("sidecar").join("photogal-server-bin");
+        let bin = resource_dir.join("sidecar").join(&bin_name);
         if bin.exists() {
             return Some(bin);
         }
         // Flat layout: Tauri may flatten resources into resource_dir root
-        let bin = resource_dir.join("photogal-server-bin");
+        let bin = resource_dir.join(&bin_name);
         if bin.exists() {
             return Some(bin);
         }
@@ -50,7 +51,7 @@ fn find_sidecar_path(app: &tauri::App) -> Option<std::path::PathBuf> {
     // Dev: sidecar/ directory next to src-tauri
     let dev_bin = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("sidecar")
-        .join("photogal-server-bin");
+        .join(&bin_name);
     if dev_bin.exists() {
         return Some(dev_bin);
     }
@@ -75,6 +76,13 @@ fn reveal_in_finder(path: String) -> Result<(), String> {
             .arg(&path)
             .spawn()
             .map_err(|e| format!("Failed to reveal in Finder: {}", e))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer.exe")
+            .arg(format!("/select,{}", &path))
+            .spawn()
+            .map_err(|e| format!("Failed to reveal in Explorer: {}", e))?;
     }
     Ok(())
 }
