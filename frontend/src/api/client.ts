@@ -1,11 +1,22 @@
 let BASE = '/api'
 
-/** Detect Tauri and set the correct backend base URL. Call before rendering. */
+/** Detect Tauri, set backend base URL, and wait for backend to be ready. */
 export async function initApi() {
   if ('__TAURI_INTERNALS__' in window) {
     const { invoke } = await import('@tauri-apps/api/core')
     const port = await invoke<number>('get_backend_port')
     BASE = `http://127.0.0.1:${port}/api`
+
+    // Wait for sidecar backend to be ready (PyInstaller cold start ~10-15s)
+    const deadline = Date.now() + 60_000
+    while (Date.now() < deadline) {
+      try {
+        const res = await fetch(`${BASE}/health`)
+        if (res.ok) return
+      } catch { /* backend not ready yet */ }
+      await new Promise(r => setTimeout(r, 500))
+    }
+    console.error('[API] Backend did not start within 60s')
   }
 }
 
