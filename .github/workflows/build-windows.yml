@@ -23,11 +23,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [cpu]
+        variant: [cpu, cuda]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # --- Free disk space for CUDA build (~10GB freed) ---
+      - name: Free disk space
+        run: |
+          $before = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
+          Write-Host "Free space before cleanup: $before GB"
+          Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files\Android" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files\MongoDB" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files\MySQL" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files\PostgreSQL" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files (x86)\Microsoft SDKs\Azure" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Modules" -ErrorAction SilentlyContinue
+          $after = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
+          Write-Host "Free space after cleanup: $after GB (freed $([math]::Round($after - $before, 1)) GB)"
 
       # --- Caching ---
       - name: Cache Rust
@@ -109,13 +124,13 @@ jobs:
           if (Test-Path "src-tauri\sidecar") { Remove-Item -Recurse -Force "src-tauri\sidecar" }
           Copy-Item -Recurse "backend\dist\photogal-server" "src-tauri\sidecar"
 
-      - name: Free disk space
+      - name: Free disk space before Tauri build
         run: |
           Remove-Item -Recurse -Force "backend\dist" -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force "backend\build" -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force "backend\.venv" -ErrorAction SilentlyContinue
           uv cache clean
-          $free = [math]::Round((Get-PSDrive D).Free / 1GB, 1)
+          $free = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
           Write-Host "Free disk space: $free GB"
 
       # --- Frontend ---
