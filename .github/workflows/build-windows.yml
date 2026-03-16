@@ -187,12 +187,12 @@ jobs:
       - name: Trim unused CUDA DLLs
         working-directory: backend/dist/photogal-server
         run: |
+          $ErrorActionPreference = 'SilentlyContinue'
           $before = (Get-ChildItem -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-          Get-ChildItem -Recurse -Filter "cufft*" | Remove-Item -Force
-          Get-ChildItem -Recurse -Filter "cusparse*" | Remove-Item -Force
-          Get-ChildItem -Recurse -Filter "nccl*" | Remove-Item -Force
-          Get-ChildItem -Recurse -Filter "nvtx*" | Remove-Item -Force
-          Get-ChildItem -Recurse -Filter "cutensor*" | Remove-Item -Force
+          foreach ($pattern in @("cufft*", "cusparse*", "nccl*", "nvtx*", "cutensor*")) {
+            Get-ChildItem -Recurse -Filter $pattern | Remove-Item -Force -ErrorAction SilentlyContinue
+          }
+          $ErrorActionPreference = 'Stop'
           $after = (Get-ChildItem -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
           Write-Host "Sidecar size: $([math]::Round($before, 0)) MB -> $([math]::Round($after, 0)) MB (trimmed $([math]::Round($before - $after, 0)) MB)"
 
