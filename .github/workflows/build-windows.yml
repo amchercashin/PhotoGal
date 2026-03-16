@@ -1,0 +1,175 @@
+name: Build Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        variant: [cpu, cuda]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- Caching ---
+      - name: Cache Rust
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: rust-windows-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: rust-windows-
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-windows-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: npm-windows-
+
+      - name: Cache Python venv
+        uses: actions/cache@v4
+        with:
+          path: backend/.venv
+          key: python-windows-${{ matrix.variant }}-${{ hashFiles('backend/pyproject.toml') }}
+          restore-keys: python-windows-${{ matrix.variant }}-
+
+      # --- Setup tools ---
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Tauri CLI
+        run: cargo binstall tauri-cli --no-confirm
+
+      # --- Backend (Python sidecar) ---
+      - name: Create venv and install torch (CPU)
+        if: matrix.variant == 'cpu'
+        working-directory: backend
+        run: |
+          uv venv .venv
+          uv pip install --python .venv\Scripts\python.exe torch --index-url https://download.pytorch.org/whl/cpu
+          uv pip install --python .venv\Scripts\python.exe onnxruntime
+
+      - name: Create venv and install torch (CUDA)
+        if: matrix.variant == 'cuda'
+        working-directory: backend
+        run: |
+          uv venv .venv
+          uv pip install --python .venv\Scripts\python.exe torch --index-url https://download.pytorch.org/whl/cu121
+          uv pip install --python .venv\Scripts\python.exe onnxruntime-gpu
+
+      - name: Install remaining Python deps
+        working-directory: backend
+        run: |
+          uv pip install --python .venv\Scripts\python.exe .
+          uv pip install --python .venv\Scripts\python.exe pyinstaller
+
+      - name: Build sidecar with PyInstaller
+        working-directory: backend
+        run: .venv\Scripts\python.exe -m PyInstaller photogal-server.spec --noconfirm
+
+      - name: Copy sidecar to Tauri resources
+        run: |
+          if (Test-Path "src-tauri\sidecar") { Remove-Item -Recurse -Force "src-tauri\sidecar" }
+          Copy-Item -Recurse "backend\dist\photogal-server" "src-tauri\sidecar"
+
+      # --- Frontend ---
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      # --- Tauri build ---
+      - name: Build Tauri app (NSIS)
+        run: cargo tauri build --bundles nsis
+
+      # --- Upload ---
+      - name: Get version from tauri.conf.json
+        id: version
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Rename artifact
+        run: |
+          $src = "src-tauri\target\release\bundle\nsis\PhotoGal_${{ steps.version.outputs.VERSION }}_x64-setup.exe"
+          if ("${{ matrix.variant }}" -eq "cuda") {
+            $dst = "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-cuda-setup.exe"
+          } else {
+            $dst = "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-setup.exe"
+          }
+          Copy-Item $src $dst
+
+      - name: Check artifact size
+        run: |
+          $file = if ("${{ matrix.variant }}" -eq "cuda") {
+            "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-cuda-setup.exe"
+          } else {
+            "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-setup.exe"
+          }
+          $size = (Get-Item $file).Length / 1MB
+          Write-Host "Artifact size: $([math]::Round($size, 1)) MB"
+          if ($size -gt 1900) {
+            Write-Error "Artifact exceeds 1.9GB limit: $([math]::Round($size, 1)) MB"
+            exit 1
+          }
+
+      - name: Wait for GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          for ($i = 1; $i -le 30; $i++) {
+            $result = gh release view $tag 2>&1
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "Release $tag found"
+              break
+            }
+            Write-Host "Waiting for release $tag... (attempt $i/30)"
+            Start-Sleep -Seconds 10
+          }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Release $tag not found after 5 minutes"
+            exit 1
+          }
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $file = if ("${{ matrix.variant }}" -eq "cuda") {
+            "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-cuda-setup.exe"
+          } else {
+            "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-setup.exe"
+          }
+          gh release upload "${{ github.ref_name }}" $file --clobber
