@@ -18,18 +18,12 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-cpu:
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [cpu, cuda]
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --- Free disk space for CUDA build (~10GB freed) ---
       - name: Free disk space
         run: |
           $before = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
@@ -44,7 +38,6 @@ jobs:
           $after = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
           Write-Host "Free space after cleanup: $after GB (freed $([math]::Round($after - $before, 1)) GB)"
 
-      # --- Caching ---
       - name: Cache Rust
         uses: actions/cache@v4
         with:
@@ -62,14 +55,6 @@ jobs:
           key: npm-windows-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: npm-windows-
 
-      - name: Cache Python venv
-        uses: actions/cache@v4
-        with:
-          path: backend/.venv
-          key: python-windows-${{ matrix.variant }}-${{ hashFiles('backend/pyproject.toml') }}
-          restore-keys: python-windows-${{ matrix.variant }}-
-
-      # --- Setup tools ---
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -92,26 +77,12 @@ jobs:
       - name: Install Tauri CLI
         run: cargo binstall tauri-cli --no-confirm
 
-      # --- Backend (Python sidecar) ---
-      - name: Create venv and install torch (CPU)
-        if: matrix.variant == 'cpu'
+      - name: Create venv and install CPU torch
         working-directory: backend
         run: |
           uv venv .venv
           uv pip install --python .venv\Scripts\python.exe torch --index-url https://download.pytorch.org/whl/cpu
           uv pip install --python .venv\Scripts\python.exe onnxruntime
-
-      - name: Create venv and install torch (CUDA)
-        if: matrix.variant == 'cuda'
-        working-directory: backend
-        run: |
-          uv venv .venv
-          uv pip install --python .venv\Scripts\python.exe torch --index-url https://download.pytorch.org/whl/cu121
-          uv pip install --python .venv\Scripts\python.exe onnxruntime-gpu
-
-      - name: Install remaining Python deps
-        working-directory: backend
-        run: |
           uv pip install --python .venv\Scripts\python.exe .
           uv pip install --python .venv\Scripts\python.exe pyinstaller
 
@@ -124,7 +95,7 @@ jobs:
           if (Test-Path "src-tauri\sidecar") { Remove-Item -Recurse -Force "src-tauri\sidecar" }
           Copy-Item -Recurse "backend\dist\photogal-server" "src-tauri\sidecar"
 
-      - name: Free disk space before Tauri build
+      - name: Free disk before Tauri build
         run: |
           Remove-Item -Recurse -Force "backend\dist" -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force "backend\build" -ErrorAction SilentlyContinue
@@ -133,7 +104,6 @@ jobs:
           $free = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
           Write-Host "Free disk space: $free GB"
 
-      # --- Frontend ---
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
@@ -142,12 +112,10 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      # --- Tauri build ---
       - name: Build Tauri app (NSIS)
         run: cargo tauri build --bundles nsis
 
-      # --- Upload ---
-      - name: Get version from tauri.conf.json
+      - name: Get version
         id: version
         run: |
           $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
@@ -156,26 +124,7 @@ jobs:
       - name: Rename artifact
         run: |
           $src = "src-tauri\target\release\bundle\nsis\PhotoGal_${{ steps.version.outputs.VERSION }}_x64-setup.exe"
-          if ("${{ matrix.variant }}" -eq "cuda") {
-            $dst = "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-cuda-setup.exe"
-          } else {
-            $dst = "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-setup.exe"
-          }
-          Copy-Item $src $dst
-
-      - name: Check artifact size
-        run: |
-          $file = if ("${{ matrix.variant }}" -eq "cuda") {
-            "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-cuda-setup.exe"
-          } else {
-            "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-setup.exe"
-          }
-          $size = (Get-Item $file).Length / 1MB
-          Write-Host "Artifact size: $([math]::Round($size, 1)) MB"
-          if ($size -gt 1900) {
-            Write-Error "Artifact exceeds 1.9GB limit: $([math]::Round($size, 1)) MB"
-            exit 1
-          }
+          Copy-Item $src "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-setup.exe"
 
       - name: Wait for GitHub Release
         env:
@@ -183,27 +132,92 @@ jobs:
         run: |
           $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
           for ($i = 1; $i -le 30; $i++) {
-            $result = gh release view $tag 2>&1
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "Release $tag found"
-              break
-            }
-            Write-Host "Waiting for release $tag... (attempt $i/30)"
-            Start-Sleep -Seconds 10
-          }
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Release $tag not found after 5 minutes"
-            exit 1
+            if ((gh release view $tag 2>&1) -and $LASTEXITCODE -eq 0) { Write-Host "Release found"; break }
+            Write-Host "Waiting... ($i/30)"; Start-Sleep -Seconds 10
           }
 
       - name: Upload to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $file = if ("${{ matrix.variant }}" -eq "cuda") {
-            "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-cuda-setup.exe"
-          } else {
-            "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-setup.exe"
-          }
           $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
-          gh release upload $tag $file --clobber
+          gh release upload $tag "PhotoGal_${{ steps.version.outputs.VERSION }}_x64-setup.exe" --clobber
+
+  build-cuda:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          $before = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
+          Write-Host "Free space before cleanup: $before GB"
+          Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files\Android" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files\MongoDB" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files\MySQL" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files\PostgreSQL" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files (x86)\Microsoft SDKs\Azure" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Modules" -ErrorAction SilentlyContinue
+          $after = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
+          Write-Host "Free space after cleanup: $after GB (freed $([math]::Round($after - $before, 1)) GB)"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Create venv and install CUDA torch
+        working-directory: backend
+        run: |
+          uv venv .venv
+          uv pip install --python .venv\Scripts\python.exe torch --index-url https://download.pytorch.org/whl/cu121
+          uv pip install --python .venv\Scripts\python.exe onnxruntime-gpu
+          uv pip install --python .venv\Scripts\python.exe .
+          uv pip install --python .venv\Scripts\python.exe pyinstaller
+
+      - name: Build sidecar with PyInstaller
+        working-directory: backend
+        run: .venv\Scripts\python.exe -m PyInstaller photogal-server.spec --noconfirm
+
+      - name: Trim unused CUDA DLLs
+        working-directory: backend/dist/photogal-server
+        run: |
+          $before = (Get-ChildItem -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
+          Get-ChildItem -Recurse -Filter "cufft*" | Remove-Item -Force
+          Get-ChildItem -Recurse -Filter "cusparse*" | Remove-Item -Force
+          Get-ChildItem -Recurse -Filter "nccl*" | Remove-Item -Force
+          Get-ChildItem -Recurse -Filter "nvtx*" | Remove-Item -Force
+          Get-ChildItem -Recurse -Filter "cutensor*" | Remove-Item -Force
+          $after = (Get-ChildItem -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
+          Write-Host "Sidecar size: $([math]::Round($before, 0)) MB -> $([math]::Round($after, 0)) MB (trimmed $([math]::Round($before - $after, 0)) MB)"
+
+      - name: Get version
+        id: version
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Compress CUDA sidecar
+        run: Compress-Archive -Path "backend\dist\photogal-server\*" -DestinationPath "PhotoGal_${{ steps.version.outputs.VERSION }}_cuda-sidecar.zip"
+
+      - name: Wait for GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
+          for ($i = 1; $i -le 30; $i++) {
+            if ((gh release view $tag 2>&1) -and $LASTEXITCODE -eq 0) { Write-Host "Release found"; break }
+            Write-Host "Waiting... ($i/30)"; Start-Sleep -Seconds 10
+          }
+
+      - name: Upload CUDA sidecar to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
+          gh release upload $tag "PhotoGal_${{ steps.version.outputs.VERSION }}_cuda-sidecar.zip" --clobber

@@ -2,6 +2,8 @@ use std::process::{Child, Command};
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
+mod cuda;
+
 pub struct BackendProcess(Mutex<Option<Child>>);
 
 /// Find a free TCP port
@@ -15,7 +17,7 @@ fn find_free_port() -> u16 {
 }
 
 /// Wait for backend to be ready by polling /api/health
-fn wait_for_backend(port: u16, timeout_ms: u64) {
+pub fn wait_for_backend(port: u16, timeout_ms: u64) {
     let url = format!("http://127.0.0.1:{}/api/health", port);
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     loop {
@@ -33,11 +35,23 @@ fn wait_for_backend(port: u16, timeout_ms: u64) {
     }
 }
 
+pub fn start_sidecar(
+    sidecar_bin: &std::path::Path,
+    port: u16,
+) -> Result<Child, String> {
+    let sidecar_dir = sidecar_bin.parent().unwrap().to_path_buf();
+    Command::new(sidecar_bin)
+        .current_dir(&sidecar_dir)
+        .args(["serve", "--port", &port.to_string()])
+        .spawn()
+        .map_err(|e| format!("Failed to start sidecar: {e}"))
+}
+
 /// Find the sidecar binary path in bundled Resources or dev sidecar/ dir
-fn find_sidecar_path(app: &tauri::App) -> Option<std::path::PathBuf> {
+pub fn find_sidecar_path(handle: &impl tauri::Manager<tauri::Wry>) -> Option<std::path::PathBuf> {
     let bin_name = format!("photogal-server-bin{}", std::env::consts::EXE_SUFFIX);
     // Production: bundled in Resources/sidecar/
-    if let Ok(resource_dir) = app.path().resource_dir() {
+    if let Ok(resource_dir) = handle.path().resource_dir() {
         let bin = resource_dir.join("sidecar").join(&bin_name);
         if bin.exists() {
             return Some(bin);
@@ -100,12 +114,7 @@ pub fn run() {
         .setup(move |app| {
             if let Some(sidecar_bin) = find_sidecar_path(app) {
                 eprintln!("Launching sidecar: {:?}", sidecar_bin);
-                let sidecar_dir = sidecar_bin.parent().unwrap().to_path_buf();
-                match Command::new(&sidecar_bin)
-                    .current_dir(&sidecar_dir)
-                    .args(["serve", "--port", &port_copy.to_string()])
-                    .spawn()
-                {
+                match start_sidecar(&sidecar_bin, port_copy) {
                     Ok(child) => {
                         let state = app.state::<BackendProcess>();
                         *state.0.lock().unwrap() = Some(child);
@@ -113,7 +122,7 @@ pub fn run() {
                         std::thread::spawn(move || wait_for_backend(p, 60_000));
                     }
                     Err(e) => {
-                        eprintln!("Failed to start sidecar: {e}");
+                        eprintln!("{e}");
                     }
                 }
             } else {
@@ -133,7 +142,12 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![get_backend_port, reveal_in_finder])
+        .invoke_handler(tauri::generate_handler![
+            get_backend_port,
+            reveal_in_finder,
+            cuda::download_cuda_addon,
+            cuda::check_cuda_status,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

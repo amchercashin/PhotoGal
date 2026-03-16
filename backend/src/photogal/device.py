@@ -104,7 +104,7 @@ def detect_capabilities() -> DeviceInfo:
         if result.returncode == 0 and result.stdout.strip():
             gpu_name = result.stdout.strip().split("\n")[0]
             upgrade_available = True
-            upgrade_size_mb = 2500
+            upgrade_size_mb = 1500
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
