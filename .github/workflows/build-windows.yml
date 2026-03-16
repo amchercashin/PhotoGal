@@ -189,7 +189,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'SilentlyContinue'
           $before = (Get-ChildItem -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-          foreach ($pattern in @("cufft*", "cusparse*", "cusolver*", "curand*", "cudnn*", "nccl*", "nvtx*", "cutensor*", "nvrtc*", "nvJitLink*")) {
+          foreach ($pattern in @("cufft*", "cusparse*", "cusolver*", "curand*", "nccl*", "nvtx*", "cutensor*", "nvrtc*", "nvJitLink*")) {
             Get-ChildItem -Recurse -Filter $pattern | Remove-Item -Force -ErrorAction SilentlyContinue
           }
           $ErrorActionPreference = 'Stop'
@@ -204,11 +204,11 @@ jobs:
 
       - name: Compress CUDA sidecar
         run: |
-          7z a -mx=7 -mmt=on "PhotoGal_${{ steps.version.outputs.VERSION }}_cuda-sidecar.zip" ".\backend\dist\photogal-server\*"
-          $size = [math]::Round((Get-Item "PhotoGal_${{ steps.version.outputs.VERSION }}_cuda-sidecar.zip").Length / 1MB, 0)
-          Write-Host "CUDA sidecar zip: $size MB"
+          7z a -mx=7 -mmt=on "PhotoGal_${{ steps.version.outputs.VERSION }}_cuda-sidecar.7z" ".\backend\dist\photogal-server\*"
+          $size = [math]::Round((Get-Item "PhotoGal_${{ steps.version.outputs.VERSION }}_cuda-sidecar.7z").Length / 1MB, 0)
+          Write-Host "CUDA sidecar archive: $size MB"
           if ($size -gt 2000) {
-            Write-Error "CUDA zip exceeds 2GB GitHub limit: $size MB"
+            Write-Error "CUDA archive exceeds 2GB GitHub limit: $size MB"
             exit 1
           }
 
@@ -227,4 +227,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
-          gh release upload $tag "PhotoGal_${{ steps.version.outputs.VERSION }}_cuda-sidecar.zip" --clobber
+          gh release upload $tag "PhotoGal_${{ steps.version.outputs.VERSION }}_cuda-sidecar.7z" --clobber
