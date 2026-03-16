@@ -1,5 +1,6 @@
 """Tests for platform-aware data directory paths."""
 
+import importlib
 import sys
 from unittest.mock import patch
 from pathlib import Path
@@ -59,3 +60,27 @@ def test_macos_cache_dir_uses_library_caches(tmp_path):
         result = refreshed()
         assert "Library/Caches/com.photogal.desktop" in str(result)
         assert result.exists()
+
+
+def test_windows_data_dir_uses_appdata(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData" / "Roaming"))
+    (tmp_path / "AppData" / "Roaming").mkdir(parents=True)
+    import photogal.config
+    importlib.reload(photogal.config)
+    from photogal.config import _get_data_dir as refreshed
+    result = refreshed()
+    assert "AppData" in str(result)
+    assert "PhotoGal" in str(result)
+
+
+def test_windows_cache_dir_uses_localappdata(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "AppData" / "Local"))
+    (tmp_path / "AppData" / "Local").mkdir(parents=True)
+    import photogal.config
+    importlib.reload(photogal.config)
+    from photogal.config import get_cache_dir as refreshed
+    result = refreshed()
+    assert "AppData" in str(result)
+    assert "PhotoGal" in str(result)

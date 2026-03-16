@@ -1,5 +1,6 @@
 """Configuration and constants."""
 
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -54,6 +55,8 @@ def _get_data_dir() -> Path:
     """Platform-aware app data directory."""
     if sys.platform == "darwin":
         d = Path.home() / "Library" / "Application Support" / "com.photogal.desktop"
+    elif sys.platform == "win32":
+        d = Path(os.environ.get("APPDATA", str(Path.home()))) / "PhotoGal"
     else:
         d = Path.home() / ".photogal"
     d.mkdir(parents=True, exist_ok=True)
@@ -69,6 +72,8 @@ def get_cache_dir() -> Path:
     """Platform-aware cache directory (regenerable data)."""
     if sys.platform == "darwin":
         d = Path.home() / "Library" / "Caches" / "com.photogal.desktop"
+    elif sys.platform == "win32":
+        d = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PhotoGal"
     else:
         d = Path.home() / ".photogal" / "cache"
     d.mkdir(parents=True, exist_ok=True)
