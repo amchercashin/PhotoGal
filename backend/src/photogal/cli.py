@@ -2,13 +2,13 @@
 
 import os
 import sys
-from pathlib import Path
 
-# Redirect model caches to standard location (dev mode)
-if sys.platform == "darwin":
-    _cache = Path.home() / "Library" / "Caches" / "com.photogal.desktop" / "models"
-    os.environ.setdefault("HF_HOME", str(_cache / "huggingface"))
-    os.environ.setdefault("ARGOS_PACKAGES_DIR", str(_cache / "argos"))
+# Redirect model caches to standard location (before library imports)
+from photogal.config import get_models_cache_dir
+
+_models = get_models_cache_dir()
+os.environ.setdefault("HF_HOME", str(_models / "huggingface"))
+os.environ.setdefault("ARGOS_PACKAGES_DIR", str(_models / "argos"))
 
 import typer
 import uvicorn
