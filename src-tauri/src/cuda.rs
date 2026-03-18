@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, State};
 
@@ -39,28 +40,128 @@ pub fn download_cuda_addon(
     let archive_path = temp_dir.join("photogal-cuda.7z");
     let extract_dir = temp_dir.join("photogal-cuda-sidecar");
 
-    // --- Download ---
+    // --- Download with retry + resume ---
     eprintln!("Downloading CUDA sidecar from {}", url);
-    let resp = ureq::get(&url)
-        .call()
-        .map_err(|e| format!("Download failed: {e}"))?;
 
+    let agent = ureq::AgentBuilder::new()
+        .timeout_read(Duration::from_secs(30))
+        .timeout_connect(Duration::from_secs(15))
+        .build();
+
+    let max_retries = 3;
     let mut downloaded: u64 = 0;
-    let mut body = resp.into_reader();
-    let mut file = fs::File::create(&archive_path)
-        .map_err(|e| format!("Failed to create temp file: {e}"))?;
+    let mut total_bytes: Option<u64> = None;
 
-    let mut buf = [0u8; 65536];
-    loop {
-        let n = body.read(&mut buf).map_err(|e| format!("Download error: {e}"))?;
-        if n == 0 { break; }
-        file.write_all(&buf[..n]).map_err(|e| format!("Write error: {e}"))?;
-        downloaded += n as u64;
-        let _ = handle.emit("cuda-download-progress", serde_json::json!({
-            "downloaded_mb": downloaded as f64 / 1_048_576.0
-        }));
+    for attempt in 0..max_retries {
+        let resp = if downloaded > 0 {
+            eprintln!("Retry {}/{}: resuming from {} bytes", attempt + 1, max_retries, downloaded);
+            match agent.get(&url)
+                .set("Range", &format!("bytes={}-", downloaded))
+                .call()
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Connection error (attempt {}): {e}", attempt + 1);
+                    if attempt == max_retries - 1 {
+                        return Err(format!("Download failed after {} attempts: {e}", max_retries));
+                    }
+                    std::thread::sleep(Duration::from_secs(2));
+                    continue;
+                }
+            }
+        } else {
+            match agent.get(&url).call() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Connection error (attempt {}): {e}", attempt + 1);
+                    if attempt == max_retries - 1 {
+                        return Err(format!("Download failed after {} attempts: {e}", max_retries));
+                    }
+                    std::thread::sleep(Duration::from_secs(2));
+                    continue;
+                }
+            }
+        };
+
+        // If resume requested but server doesn't support it, start over
+        if downloaded > 0 && resp.status() != 206 {
+            eprintln!("Server doesn't support resume, starting over");
+            downloaded = 0;
+        }
+
+        // Parse total size from first successful response
+        if total_bytes.is_none() {
+            if let Some(cl) = resp.header("Content-Length") {
+                if let Ok(len) = cl.parse::<u64>() {
+                    total_bytes = Some(if resp.status() == 206 { downloaded + len } else { len });
+                    let _ = handle.emit("cuda-download-progress", serde_json::json!({
+                        "downloaded_mb": downloaded as f64 / 1_048_576.0,
+                        "total_mb": total_bytes.unwrap() as f64 / 1_048_576.0
+                    }));
+                }
+            }
+        }
+
+        // Open file: create new or append for resume
+        let mut file = if downloaded > 0 {
+            fs::OpenOptions::new()
+                .append(true)
+                .open(&archive_path)
+                .map_err(|e| format!("Failed to open file for resume: {e}"))?
+        } else {
+            fs::File::create(&archive_path)
+                .map_err(|e| format!("Failed to create temp file: {e}"))?
+        };
+
+        let mut body = resp.into_reader();
+        let mut buf = [0u8; 262_144]; // 256KB buffer
+        let mut last_emit = Instant::now();
+        let mut read_error = false;
+
+        loop {
+            match body.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    file.write_all(&buf[..n]).map_err(|e| format!("Write error: {e}"))?;
+                    downloaded += n as u64;
+
+                    // Throttle events: emit at most every 250ms
+                    if last_emit.elapsed() >= Duration::from_millis(250) {
+                        let _ = handle.emit("cuda-download-progress", serde_json::json!({
+                            "downloaded_mb": downloaded as f64 / 1_048_576.0,
+                            "total_mb": total_bytes.map(|t| t as f64 / 1_048_576.0)
+                        }));
+                        last_emit = Instant::now();
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Read error at {} bytes: {e}", downloaded);
+                    read_error = true;
+                    break;
+                }
+            }
+        }
+
+        if !read_error {
+            // Final progress event
+            let _ = handle.emit("cuda-download-progress", serde_json::json!({
+                "downloaded_mb": downloaded as f64 / 1_048_576.0,
+                "total_mb": total_bytes.map(|t| t as f64 / 1_048_576.0)
+            }));
+            break;
+        }
+
+        if attempt == max_retries - 1 {
+            return Err(format!(
+                "Download failed after {} attempts at {} MB",
+                max_retries,
+                downloaded / 1_048_576
+            ));
+        }
+
+        std::thread::sleep(Duration::from_secs(2));
     }
-    drop(file);
+
     eprintln!("Download complete: {} MB", downloaded / 1_048_576);
 
     // --- Extract 7z ---
