@@ -1,4 +1,4 @@
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
@@ -16,16 +16,33 @@ fn find_free_port() -> u16 {
         .port()
 }
 
+/// Path to sidecar log file
+fn sidecar_log_path() -> std::path::PathBuf {
+    let base = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    #[cfg(target_os = "macos")]
+    let dir = base.join("com.photogal.desktop");
+    #[cfg(target_os = "windows")]
+    let dir = base.join("PhotoGal");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let dir = base.join("photogal");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("sidecar.log")
+}
+
 /// Wait for backend to be ready by polling /api/health
 pub fn wait_for_backend(port: u16, timeout_ms: u64) {
     let url = format!("http://127.0.0.1:{}/api/health", port);
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(2))
+        .timeout_read(std::time::Duration::from_secs(5))
+        .build();
     loop {
         if std::time::Instant::now() > deadline {
             eprintln!("Backend did not start within {}ms", timeout_ms);
             break;
         }
-        if let Ok(resp) = ureq::get(&url).call() {
+        if let Ok(resp) = agent.get(&url).call() {
             if resp.status() == 200 {
                 eprintln!("Backend ready on port {}", port);
                 break;
@@ -40,9 +57,20 @@ pub fn start_sidecar(
     port: u16,
 ) -> Result<Child, String> {
     let sidecar_dir = sidecar_bin.parent().unwrap().to_path_buf();
+    let log_path = sidecar_log_path();
+    eprintln!("Sidecar log: {:?}", log_path);
+
+    let log_file = std::fs::File::create(&log_path)
+        .map_err(|e| format!("Failed to create sidecar log: {e}"))?;
+    let stderr_file = log_file
+        .try_clone()
+        .map_err(|e| format!("Failed to clone log file handle: {e}"))?;
+
     let mut cmd = Command::new(sidecar_bin);
     cmd.current_dir(&sidecar_dir)
-        .args(["serve", "--port", &port.to_string()]);
+        .args(["serve", "--port", &port.to_string()])
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(stderr_file));
     // Hide console window on Windows
     #[cfg(target_os = "windows")]
     {
@@ -81,6 +109,32 @@ pub fn find_sidecar_path(handle: &impl tauri::Manager<tauri::Wry>) -> Option<std
 #[tauri::command]
 fn get_backend_port(state: State<'_, Mutex<u16>>) -> u16 {
     *state.lock().unwrap()
+}
+
+#[tauri::command]
+fn get_sidecar_status(state: State<'_, BackendProcess>) -> serde_json::Value {
+    let mut guard = state.0.lock().unwrap();
+    match guard.as_mut() {
+        None => serde_json::json!({ "status": "not_started" }),
+        Some(child) => match child.try_wait() {
+            Ok(Some(exit_status)) => {
+                serde_json::json!({
+                    "status": "exited",
+                    "exit_code": exit_status.code()
+                })
+            }
+            Ok(None) => serde_json::json!({ "status": "running" }),
+            Err(e) => serde_json::json!({
+                "status": "error",
+                "error": format!("{e}")
+            }),
+        },
+    }
+}
+
+#[tauri::command]
+fn get_sidecar_log_path() -> String {
+    sidecar_log_path().to_string_lossy().into_owned()
 }
 
 #[tauri::command]
@@ -150,6 +204,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_backend_port,
+            get_sidecar_status,
+            get_sidecar_log_path,
             reveal_in_finder,
             cuda::download_cuda_addon,
             cuda::check_cuda_status,

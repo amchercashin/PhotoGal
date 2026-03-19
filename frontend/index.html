@@ -35,14 +35,31 @@
         color: #888;
         font-size: 13px;
       }
+      .loading-error { display: none; color: #e55; font-size: 13px; margin-top: 12px; text-align: center; max-width: 500px; }
+      .loading-log-path { display: none; color: #777; font-size: 11px; margin-top: 8px; word-break: break-all; }
+      .loading-retry-btn {
+        display: none;
+        margin-top: 16px;
+        padding: 8px 20px;
+        background: #333;
+        color: #f0f0f0;
+        border: 1px solid #555;
+        border-radius: 6px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .loading-retry-btn:hover { background: #444; }
     </style>
   </head>
   <body>
     <div id="root">
-      <div class="loading-screen">
-        <div class="loading-spinner"></div>
-        <div class="loading-title">PhotoGal</div>
-        <div class="loading-text">Загрузка...</div>
+      <div class="loading-screen" id="loading-screen">
+        <div class="loading-spinner" id="loading-spinner"></div>
+        <div class="loading-title" id="loading-title">PhotoGal</div>
+        <div class="loading-text" id="loading-status">Запуск...</div>
+        <div class="loading-error" id="loading-error"></div>
+        <div class="loading-log-path" id="loading-log-path"></div>
+        <button class="loading-retry-btn" id="loading-retry-btn" onclick="location.reload()">Повторить</button>
       </div>
     </div>
     <script type="module" src="/src/main.tsx"></script>

@@ -1,23 +1,56 @@
 let BASE = '/api'
 
-/** Detect Tauri, set backend base URL, and wait for backend to be ready. */
-export async function initApi() {
-  if ('__TAURI_INTERNALS__' in window) {
-    const { invoke } = await import('@tauri-apps/api/core')
-    const port = await invoke<number>('get_backend_port')
-    BASE = `http://127.0.0.1:${port}/api`
+function updateLoadingStatus(text: string) {
+  const el = document.getElementById('loading-status')
+  if (el) el.textContent = text
+}
 
-    // Wait for sidecar backend to be ready (PyInstaller cold start ~10-15s)
-    const deadline = Date.now() + 60_000
-    while (Date.now() < deadline) {
-      try {
-        const res = await fetch(`${BASE}/health`)
-        if (res.ok) return
-      } catch { /* backend not ready yet */ }
-      await new Promise(r => setTimeout(r, 500))
-    }
-    console.error('[API] Backend did not start within 60s')
+/** Detect Tauri, set backend base URL, and wait for backend to be ready. */
+export async function initApi(): Promise<{ ok: boolean; error?: string; logPath?: string }> {
+  if (!('__TAURI_INTERNALS__' in window)) {
+    return { ok: true }
   }
+
+  const { invoke } = await import('@tauri-apps/api/core')
+  const port = await invoke<number>('get_backend_port')
+  BASE = `http://127.0.0.1:${port}/api`
+
+  const logPath = await invoke<string>('get_sidecar_log_path').catch(() => undefined)
+
+  // Wait for sidecar backend to be ready (PyInstaller cold start ~10-15s)
+  const deadline = Date.now() + 60_000
+  let attempt = 0
+  while (Date.now() < deadline) {
+    attempt++
+    updateLoadingStatus(`Подключение к серверу... (попытка ${attempt})`)
+
+    // Check if sidecar process is still alive
+    try {
+      const status = await invoke<{ status: string; exit_code?: number }>('get_sidecar_status')
+      if (status.status === 'exited') {
+        const msg = `Серверный процесс завершился с кодом ${status.exit_code ?? '?'}`
+        console.error('[API]', msg)
+        return { ok: false, error: msg, logPath }
+      }
+      if (status.status === 'not_started') {
+        return { ok: false, error: 'Серверный процесс не был запущен', logPath }
+      }
+    } catch { /* invoke may fail in dev mode */ }
+
+    // Fetch with AbortController timeout (5s)
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 5000)
+      const res = await fetch(`${BASE}/health`, { signal: controller.signal })
+      clearTimeout(timeoutId)
+      if (res.ok) return { ok: true }
+    } catch { /* backend not ready yet */ }
+
+    await new Promise(r => setTimeout(r, 500))
+  }
+
+  console.error('[API] Backend did not start within 60s')
+  return { ok: false, error: 'Сервер не запустился в течение 60 секунд', logPath }
 }
 
 async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
