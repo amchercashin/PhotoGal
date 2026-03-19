@@ -8,7 +8,18 @@ import platform
 import threading
 from dataclasses import dataclass
 
-import torch
+try:
+    import torch
+except OSError as _e:
+    # CUDA DLLs bundled by mistake fail to load without NVIDIA runtime.
+    # Rebuild sidecar with CPU-only torch:
+    #   uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+    raise RuntimeError(
+        f"Failed to load PyTorch: {_e}. "
+        "The sidecar appears to have been built with CUDA-enabled PyTorch "
+        "but the CUDA runtime is not available. "
+        "Rebuild with: uv pip install torch --index-url https://download.pytorch.org/whl/cpu"
+    ) from _e
 
 logger = logging.getLogger(__name__)
 

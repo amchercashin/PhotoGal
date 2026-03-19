@@ -15,6 +15,32 @@ def _find_package_dir(package_name):
     sp = site.getsitepackages()[0] if site.getsitepackages() else ""
     return os.path.join(sp, package_name)
 
+# Build variant: auto-detect from installed torch, or override via PHOTOGAL_VARIANT.
+# - auto (default): checks torch.version.cuda — works on CI without GPU
+# - cpu:  force-strip all CUDA binaries
+# - cuda: force-keep all CUDA binaries
+_variant = os.environ.get("PHOTOGAL_VARIANT", "auto").lower()
+if _variant == "auto":
+    try:
+        import torch as _torch
+        _is_cuda = getattr(_torch.version, "cuda", None) is not None
+        print(f"[photogal] Auto-detected variant: {'cuda' if _is_cuda else 'cpu'} (torch.version.cuda={getattr(_torch.version, 'cuda', None)})")
+    except Exception:
+        _is_cuda = False
+        print("[photogal] Auto-detected variant: cpu (torch not importable)")
+elif _variant == "cuda":
+    _is_cuda = True
+else:
+    _is_cuda = False
+print(f"[photogal] Build variant: {'cuda' if _is_cuda else 'cpu'} (PHOTOGAL_VARIANT={_variant})")
+
+# CUDA DLL patterns to strip from CPU builds (Windows)
+_CUDA_DLL_PATTERNS = (
+    "cuda", "cudnn", "cublas", "cusparse", "cufft", "curand",
+    "cusolver", "nccl", "nvrtc", "nvjitlink", "c10_cuda",
+    "torch_cuda", "caffe2_nvrtc",
+)
+
 a = Analysis(
     ["photogal_entry.py"],
     pathex=["src"],
@@ -102,7 +128,12 @@ a = Analysis(
     ] + ([
         # MPS backend only on macOS
         "torch.backends.mps",
-    ] if sys.platform == "darwin" else []) + [
+    ] if sys.platform == "darwin" else []) + ([
+        # CUDA backend only in cuda variant
+        "torch.cuda",
+        "torch.backends.cuda",
+        "torch.backends.cudnn",
+    ] if _is_cuda else []) + [
         # argos-translate (offline ru→en translation)
         "argostranslate",
         "argostranslate.package",
@@ -123,9 +154,25 @@ a = Analysis(
         "pytest",
         "setuptools",
         "pip",
-    ],
+    ] + ([
+        # CPU build: exclude CUDA Python modules to prevent accidental loading
+        "torch.cuda",
+        "torch.backends.cuda",
+        "torch.backends.cudnn",
+    ] if not _is_cuda else []),
     noarchive=False,
 )
+
+# CPU build: strip CUDA native libraries from binaries list
+if not _is_cuda:
+    _before = len(a.binaries)
+    a.binaries = [
+        b for b in a.binaries
+        if not any(p in b[0].lower() for p in _CUDA_DLL_PATTERNS)
+    ]
+    _stripped = _before - len(a.binaries)
+    if _stripped:
+        print(f"[photogal] CPU build: stripped {_stripped} CUDA binaries")
 
 pyz = PYZ(a.pure)
 
