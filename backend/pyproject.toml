@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "photogal"
-version = "0.5.8"
+version = "0.5.9"
 description = "PhotoGal - progressive photo library organizer"
 requires-python = ">=3.12"
 dependencies = [
