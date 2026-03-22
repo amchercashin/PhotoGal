@@ -29,8 +29,9 @@ fn sidecar_log_path() -> std::path::PathBuf {
     dir.join("sidecar.log")
 }
 
-/// Wait for backend to be ready by polling /api/health
-pub fn wait_for_backend(port: u16, timeout_ms: u64) {
+/// Wait for backend to be ready by polling /api/health.
+/// Returns `true` if backend responded with 200, `false` on timeout.
+pub fn wait_for_backend(port: u16, timeout_ms: u64) -> bool {
     let url = format!("http://127.0.0.1:{}/api/health", port);
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     let agent = ureq::AgentBuilder::new()
@@ -40,12 +41,12 @@ pub fn wait_for_backend(port: u16, timeout_ms: u64) {
     loop {
         if std::time::Instant::now() > deadline {
             eprintln!("Backend did not start within {}ms", timeout_ms);
-            break;
+            return false;
         }
         if let Ok(resp) = agent.get(&url).call() {
             if resp.status() == 200 {
                 eprintln!("Backend ready on port {}", port);
-                break;
+                return true;
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(250));

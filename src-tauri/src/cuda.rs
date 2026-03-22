@@ -210,17 +210,58 @@ pub fn download_cuda_addon(
             if let Ok(mut guard) = backend_state.0.lock() {
                 *guard = Some(child);
             }
-            wait_for_backend(port, 60_000);
-            let _ = fs::remove_dir_all(&backup_dir);
-            let _ = fs::remove_file(&archive_path);
-            eprintln!("CUDA sidecar installed successfully");
-            Ok("cuda".to_string())
+
+            // Brief delay to catch immediate crashes (e.g. DLL load failure)
+            std::thread::sleep(Duration::from_secs(2));
+
+            let mut crashed = false;
+            if let Ok(mut guard) = backend_state.0.lock() {
+                if let Some(ref mut c) = *guard {
+                    if let Ok(Some(exit)) = c.try_wait() {
+                        eprintln!("CUDA sidecar exited immediately with: {:?}", exit.code());
+                        crashed = true;
+                    }
+                }
+            }
+
+            let backend_ok = !crashed && wait_for_backend(port, 60_000);
+
+            if backend_ok {
+                let _ = fs::remove_dir_all(&backup_dir);
+                let _ = fs::remove_file(&archive_path);
+                eprintln!("CUDA sidecar installed successfully");
+                Ok("cuda".to_string())
+            } else {
+                eprintln!("CUDA sidecar failed health check, restoring CPU backup");
+                // Kill broken CUDA process
+                if let Ok(mut guard) = backend_state.0.lock() {
+                    if let Some(mut c) = guard.take() {
+                        let _ = c.kill();
+                        let _ = c.wait();
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(1));
+                // Restore CPU sidecar
+                let _ = fs::remove_dir_all(&sidecar_dir);
+                let _ = fs::rename(&backup_dir, &sidecar_dir);
+                let _ = fs::remove_file(sidecar_dir.join("cuda_installed"));
+                // Restart CPU backend
+                let cpu_bin = sidecar_dir.join(&bin_name);
+                if let Ok(child) = start_sidecar(&cpu_bin, port) {
+                    if let Ok(mut guard) = backend_state.0.lock() {
+                        *guard = Some(child);
+                    }
+                    wait_for_backend(port, 60_000);
+                }
+                let _ = fs::remove_file(&archive_path);
+                Err("CUDA sidecar failed to start — restored CPU version".to_string())
+            }
         }
         Err(e) => {
             eprintln!("CUDA sidecar failed to start, restoring CPU backup: {e}");
             let _ = fs::remove_dir_all(&sidecar_dir);
             let _ = fs::rename(&backup_dir, &sidecar_dir);
-            let _ = fs::remove_file(&marker);
+            let _ = fs::remove_file(sidecar_dir.join("cuda_installed"));
             let cpu_bin = sidecar_dir.join(&bin_name);
             if let Ok(child) = start_sidecar(&cpu_bin, port) {
                 if let Ok(mut guard) = backend_state.0.lock() {
