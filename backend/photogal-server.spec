@@ -154,12 +154,11 @@ a = Analysis(
         "pytest",
         "setuptools",
         "pip",
-    ] + ([
-        # CPU build: exclude CUDA Python modules to prevent accidental loading
-        "torch.cuda",
-        "torch.backends.cuda",
-        "torch.backends.cudnn",
-    ] if not _is_cuda else []),
+    ],
+    # NOTE: Do NOT exclude torch.cuda / torch.backends.cuda / torch.backends.cudnn.
+    # PyTorch's __init__.py imports torch.cuda internally; excluding it causes
+    # ModuleNotFoundError at runtime. The Python modules are harmless (torch.cuda
+    # just reports is_available()=False). CUDA *native DLLs* are stripped below.
     noarchive=False,
 )
 
