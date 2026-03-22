@@ -224,7 +224,9 @@ pub fn download_cuda_addon(
                 }
             }
 
-            let backend_ok = !crashed && wait_for_backend(port, 60_000);
+            // Short timeout: CUDA sidecar either starts fast or not at all.
+            // Using 60s here would block the UI (sync Tauri command).
+            let backend_ok = !crashed && wait_for_backend(port, 15_000);
 
             if backend_ok {
                 let _ = fs::remove_dir_all(&backup_dir);
@@ -251,7 +253,7 @@ pub fn download_cuda_addon(
                     if let Ok(mut guard) = backend_state.0.lock() {
                         *guard = Some(child);
                     }
-                    wait_for_backend(port, 60_000);
+                    wait_for_backend(port, 30_000);
                 }
                 let _ = fs::remove_file(&archive_path);
                 Err("CUDA sidecar failed to start — restored CPU version".to_string())
