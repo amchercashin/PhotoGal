@@ -175,7 +175,7 @@ jobs:
         working-directory: backend
         run: |
           uv venv .venv
-          uv pip install --python .venv\Scripts\python.exe torch --index-url https://download.pytorch.org/whl/cu121
+          uv pip install --python .venv\Scripts\python.exe torch --index-url https://download.pytorch.org/whl/cu128
           uv pip install --python .venv\Scripts\python.exe onnxruntime-gpu
           uv pip install --python .venv\Scripts\python.exe .
           uv pip install --python .venv\Scripts\python.exe pyinstaller
@@ -189,7 +189,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'SilentlyContinue'
           $before = (Get-ChildItem -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-          foreach ($pattern in @("cufft*", "cusparse*", "cusolver*", "curand*", "nccl*", "nvtx*", "cutensor*", "nvrtc*", "nvJitLink*")) {
+          foreach ($pattern in @("cufft*", "cusparse*", "cusolver*", "curand*", "nccl*", "nvtx*", "cutensor*", "nvrtc*", "nvJitLink*", "caffe2_nvrtc*")) {
             Get-ChildItem -Recurse -Filter $pattern | Remove-Item -Force -ErrorAction SilentlyContinue
           }
           $ErrorActionPreference = 'Stop'

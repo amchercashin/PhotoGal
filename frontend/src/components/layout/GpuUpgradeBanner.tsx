@@ -41,7 +41,7 @@ export function GpuUpgradeBanner() {
 
   // Don't show if: CUDA already installed, no NVIDIA GPU, or still loading
   if (cudaInstalled === null || cudaInstalled) return null
-  if (!device?.upgrade_available) return null
+  if (!device?.upgrade_available && !device?.upgrade_blocked_reason) return null
 
   const sizeLabel = device.upgrade_size_mb
     ? `~${(device.upgrade_size_mb / 1024).toFixed(1)} GB`
@@ -71,7 +71,13 @@ export function GpuUpgradeBanner() {
 
   return (
     <div className="mx-4 mt-2 rounded-lg border border-amber-700/50 bg-amber-950/50 px-4 py-3">
-      {state === 'idle' && (
+      {state === 'idle' && device?.upgrade_blocked_reason && (
+        <p className="text-sm text-amber-200/70">
+          Обнаружена <span className="font-medium">{device.gpu_detected ?? 'NVIDIA GPU'}</span>.
+          {' '}{device.upgrade_blocked_reason}
+        </p>
+      )}
+      {state === 'idle' && !device?.upgrade_blocked_reason && (
         <div className="flex items-center justify-between gap-4">
           <p className="text-sm text-amber-200">
             Обнаружена <span className="font-medium">{device.gpu_detected ?? 'NVIDIA GPU'}</span>.

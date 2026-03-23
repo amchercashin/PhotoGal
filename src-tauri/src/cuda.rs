@@ -1,9 +1,10 @@
 use std::fs;
 use std::io::{Read, Write};
-use std::sync::Mutex;
+use std::path::Path;
+use std::process::Child;
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{BackendProcess, find_sidecar_path, start_sidecar, wait_for_backend};
 
@@ -19,13 +20,61 @@ pub fn check_cuda_status(handle: AppHandle) -> Result<serde_json::Value, String>
     Ok(serde_json::json!({ "installed": false }))
 }
 
-/// Download CUDA sidecar from GitHub Releases and swap it in
+/// Stop sidecar process, killing entire process tree on Windows
+pub(crate) fn stop_sidecar(child: &mut Child) {
+    #[cfg(target_os = "windows")]
+    {
+        // Kill entire process tree on Windows to release all file handles.
+        // child.kill() only terminates the parent; PyInstaller may spawn
+        // multiprocessing workers that keep DLLs locked.
+        let pid = child.id();
+        let _ = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
+/// Rename directory with retry — handles delayed file handle release on Windows
+fn rename_with_retry(from: &Path, to: &Path, context: &str) -> Result<(), String> {
+    let max_attempts = 5;
+    for attempt in 1..=max_attempts {
+        match fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                if attempt == max_attempts {
+                    return Err(format!("Failed to {context}: {e}"));
+                }
+                eprintln!(
+                    "{context}: rename attempt {}/{} failed: {e}, retrying in 2s...",
+                    attempt, max_attempts
+                );
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        }
+    }
+    unreachable!()
+}
+
+/// Download CUDA sidecar from GitHub Releases and swap it in.
+/// Runs on a background thread to keep the UI responsive.
 #[tauri::command]
-pub fn download_cuda_addon(
-    handle: AppHandle,
-    backend_state: State<'_, BackendProcess>,
-    port_state: State<'_, Mutex<u16>>,
-) -> Result<String, String> {
+pub async fn download_cuda_addon(handle: AppHandle) -> Result<String, String> {
+    let handle2 = handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        do_download_cuda(handle2)
+    })
+    .await
+    .map_err(|e| format!("Internal error: {e}"))?
+}
+
+fn do_download_cuda(handle: AppHandle) -> Result<String, String> {
     let version = handle.package_info().version.to_string();
     let url = format!(
         "https://github.com/amchercashin/PhotoGal/releases/download/v{}/PhotoGal_{}_cuda-sidecar.7z",
@@ -35,6 +84,12 @@ pub fn download_cuda_addon(
     let sidecar_bin = find_sidecar_path(&handle)
         .ok_or("Sidecar not found — cannot install CUDA addon")?;
     let sidecar_dir = sidecar_bin.parent().unwrap().to_path_buf();
+
+    let port = {
+        let state = handle.state::<std::sync::Mutex<u16>>();
+        let val = *state.lock().unwrap_or_else(|e| e.into_inner());
+        val
+    };
 
     let temp_dir = std::env::temp_dir();
     let archive_path = temp_dir.join("photogal-cuda.7z");
@@ -184,28 +239,31 @@ pub fn download_cuda_addon(
     let _ = handle.emit("cuda-download-progress", serde_json::json!({
         "stage": "installing"
     }));
-    let port = *port_state.lock().unwrap();
     let backup_dir = sidecar_dir.with_file_name("sidecar-cpu-backup");
 
+    // Stop running sidecar — kill entire process tree
     eprintln!("Stopping backend for CUDA swap...");
-    if let Ok(mut guard) = backend_state.0.lock() {
-        if let Some(mut child) = guard.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+    {
+        let backend_state = handle.state::<BackendProcess>();
+        let mut guard = backend_state.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(ref mut child) = *guard {
+            stop_sidecar(child);
         }
+        let _ = guard.take();
     }
-    std::thread::sleep(std::time::Duration::from_secs(1));
+    // Extra delay for OS to release file handles (critical on Windows)
+    std::thread::sleep(Duration::from_secs(2));
 
     if backup_dir.exists() {
         let _ = fs::remove_dir_all(&backup_dir);
     }
-    fs::rename(&sidecar_dir, &backup_dir)
-        .map_err(|e| format!("Failed to backup sidecar: {e}"))?;
-    fs::rename(&extract_dir, &sidecar_dir)
-        .map_err(|e| {
-            let _ = fs::rename(&backup_dir, &sidecar_dir);
-            format!("Failed to install CUDA sidecar: {e}")
-        })?;
+
+    // Rename with retry — Windows may delay releasing file locks
+    rename_with_retry(&sidecar_dir, &backup_dir, "backup sidecar")?;
+    if let Err(e) = rename_with_retry(&extract_dir, &sidecar_dir, "install CUDA sidecar") {
+        let _ = rename_with_retry(&backup_dir, &sidecar_dir, "rollback sidecar");
+        return Err(e);
+    }
 
     let marker = sidecar_dir.join("cuda_installed");
     let _ = fs::write(&marker, "1");
@@ -215,7 +273,9 @@ pub fn download_cuda_addon(
     let new_bin = sidecar_dir.join(&bin_name);
     match start_sidecar(&new_bin, port) {
         Ok(child) => {
-            if let Ok(mut guard) = backend_state.0.lock() {
+            {
+                let backend_state = handle.state::<BackendProcess>();
+                let mut guard = backend_state.0.lock().unwrap_or_else(|e| e.into_inner());
                 *guard = Some(child);
             }
 
@@ -223,7 +283,9 @@ pub fn download_cuda_addon(
             std::thread::sleep(Duration::from_secs(2));
 
             let mut crashed = false;
-            if let Ok(mut guard) = backend_state.0.lock() {
+            {
+                let backend_state = handle.state::<BackendProcess>();
+                let mut guard = backend_state.0.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ref mut c) = *guard {
                     if let Ok(Some(exit)) = c.try_wait() {
                         eprintln!("CUDA sidecar exited immediately with: {:?}", exit.code());
@@ -233,7 +295,6 @@ pub fn download_cuda_addon(
             }
 
             // Short timeout: CUDA sidecar either starts fast or not at all.
-            // Using 60s here would block the UI (sync Tauri command).
             let backend_ok = !crashed && wait_for_backend(port, 15_000);
 
             if backend_ok {
@@ -253,21 +314,27 @@ pub fn download_cuda_addon(
                 }
 
                 // Kill broken CUDA process
-                if let Ok(mut guard) = backend_state.0.lock() {
-                    if let Some(mut c) = guard.take() {
-                        let _ = c.kill();
-                        let _ = c.wait();
+                {
+                    let backend_state = handle.state::<BackendProcess>();
+                    let mut guard = backend_state.0.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(ref mut c) = *guard {
+                        stop_sidecar(c);
                     }
+                    let _ = guard.take();
                 }
-                std::thread::sleep(Duration::from_secs(1));
+                std::thread::sleep(Duration::from_secs(2));
+
                 // Restore CPU sidecar
                 let _ = fs::remove_dir_all(&sidecar_dir);
-                let _ = fs::rename(&backup_dir, &sidecar_dir);
+                let _ = rename_with_retry(&backup_dir, &sidecar_dir, "restore CPU sidecar");
                 let _ = fs::remove_file(sidecar_dir.join("cuda_installed"));
+
                 // Restart CPU backend
                 let cpu_bin = sidecar_dir.join(&bin_name);
                 if let Ok(child) = start_sidecar(&cpu_bin, port) {
-                    if let Ok(mut guard) = backend_state.0.lock() {
+                    {
+                        let backend_state = handle.state::<BackendProcess>();
+                        let mut guard = backend_state.0.lock().unwrap_or_else(|e| e.into_inner());
                         *guard = Some(child);
                     }
                     wait_for_backend(port, 30_000);
@@ -286,11 +353,13 @@ pub fn download_cuda_addon(
         Err(e) => {
             eprintln!("CUDA sidecar failed to start, restoring CPU backup: {e}");
             let _ = fs::remove_dir_all(&sidecar_dir);
-            let _ = fs::rename(&backup_dir, &sidecar_dir);
+            let _ = rename_with_retry(&backup_dir, &sidecar_dir, "restore CPU sidecar");
             let _ = fs::remove_file(sidecar_dir.join("cuda_installed"));
             let cpu_bin = sidecar_dir.join(&bin_name);
             if let Ok(child) = start_sidecar(&cpu_bin, port) {
-                if let Ok(mut guard) = backend_state.0.lock() {
+                {
+                    let backend_state = handle.state::<BackendProcess>();
+                    let mut guard = backend_state.0.lock().unwrap_or_else(|e| e.into_inner());
                     *guard = Some(child);
                 }
                 wait_for_backend(port, 60_000);

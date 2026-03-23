@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import re
+import subprocess
 import threading
 from dataclasses import dataclass
 
@@ -27,6 +29,12 @@ _info: DeviceInfo | None = None
 _lock = threading.Lock()
 
 
+# Minimum CUDA version required by the CUDA sidecar.
+# Update this when rebuilding the CUDA sidecar with a different PyTorch CUDA variant.
+# cu128 is needed for Blackwell (RTX 50xx, sm_120) support.
+REQUIRED_CUDA_VERSION = (12, 8)
+
+
 @dataclass
 class DeviceInfo:
     backend: str                          # "cuda" | "mps" | "cpu"
@@ -38,6 +46,8 @@ class DeviceInfo:
     upgrade_size_mb: int | None
     dtype: torch.dtype
     gpu_validated: bool | None = None     # None = untested
+    nvidia_cuda_version: str | None = None  # max CUDA version supported by driver
+    upgrade_blocked_reason: str | None = None
 
     def get_optimal_batch_size(self, task: str) -> int:
         """Return adaptive batch size based on available memory."""
@@ -60,6 +70,31 @@ class DeviceInfo:
         if self.backend == "mps":
             return ["CoreMLExecutionProvider", "CPUExecutionProvider"]
         return ["CPUExecutionProvider"]
+
+
+def _parse_nvidia_smi() -> tuple[str | None, str | None]:
+    """Parse GPU name and max CUDA version from a single nvidia-smi call.
+
+    Returns (gpu_name, cuda_version) — either may be None.
+    """
+    try:
+        result = subprocess.run(
+            ["nvidia-smi"], capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return None, None
+        output = result.stdout
+        # CUDA version from header: "| NVIDIA-SMI 535.104   Driver Version: 535.104   CUDA Version: 12.2  |"
+        cuda_match = re.search(r"CUDA Version:\s+(\d+\.\d+)", output)
+        cuda_ver = cuda_match.group(1) if cuda_match else None
+        # GPU name from table row: "|   0  NVIDIA GeForce RTX 5060     Off |"
+        gpu_name = None
+        name_match = re.search(r"\|\s+\d+\s+(.+?)\s+(?:On|Off)\s*\|", output)
+        if name_match:
+            gpu_name = name_match.group(1).strip()
+        return gpu_name, cuda_ver
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None, None
 
 
 def detect_capabilities() -> DeviceInfo:
@@ -103,24 +138,37 @@ def detect_capabilities() -> DeviceInfo:
     # 3. CPU fallback — check if upgrade is possible
     upgrade_available = False
     upgrade_size_mb = None
+    upgrade_blocked_reason = None
     gpu_name = None
+    nvidia_cuda_version = None
 
-    # Detect NVIDIA GPU without CUDA PyTorch
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            gpu_name = result.stdout.strip().split("\n")[0]
+    # Detect NVIDIA GPU without CUDA PyTorch (single nvidia-smi call)
+    smi_gpu_name, nvidia_cuda_version = _parse_nvidia_smi()
+    if smi_gpu_name:
+        gpu_name = smi_gpu_name
+        if nvidia_cuda_version:
+            driver_cuda = tuple(int(x) for x in nvidia_cuda_version.split("."))
+            if driver_cuda >= REQUIRED_CUDA_VERSION:
+                upgrade_available = True
+                upgrade_size_mb = 1500
+            else:
+                upgrade_blocked_reason = (
+                    f"Драйвер поддерживает CUDA {nvidia_cuda_version}, "
+                    f"требуется ≥ {'.'.join(map(str, REQUIRED_CUDA_VERSION))}. "
+                    "Обновите драйвер NVIDIA."
+                )
+                logger.warning(
+                    "NVIDIA GPU found but driver CUDA %s < required %s",
+                    nvidia_cuda_version,
+                    ".".join(map(str, REQUIRED_CUDA_VERSION)),
+                )
+        else:
+            # Can't determine CUDA version — offer upgrade optimistically
             upgrade_available = True
             upgrade_size_mb = 1500
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
 
     # Detect Apple Silicon without MPS support
-    if not upgrade_available and platform.machine() == "arm64":
+    if not upgrade_available and not upgrade_blocked_reason and platform.machine() == "arm64":
         gpu_name = f"Apple Silicon ({platform.processor() or 'arm64'})"
         upgrade_available = True
         upgrade_size_mb = 0
@@ -134,6 +182,8 @@ def detect_capabilities() -> DeviceInfo:
         upgrade_available=upgrade_available,
         upgrade_size_mb=upgrade_size_mb,
         dtype=torch.float32,
+        nvidia_cuda_version=nvidia_cuda_version,
+        upgrade_blocked_reason=upgrade_blocked_reason,
     )
 
 

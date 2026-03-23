@@ -28,6 +28,8 @@ def device_status():
             f"~{current_speed // upgraded_speed}x faster processing"
             if info.upgrade_available else None
         ),
+        "upgrade_blocked_reason": info.upgrade_blocked_reason,
+        "nvidia_cuda_version": info.nvidia_cuda_version,
         "current_speed_ms": current_speed,
         "upgraded_speed_ms": upgraded_speed,
         "clip_batch_size": info.get_optimal_batch_size("clip"),

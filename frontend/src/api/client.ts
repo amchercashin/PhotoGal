@@ -323,6 +323,8 @@ export const api = {
     upgrade_available: boolean
     upgrade_size_mb: number | null
     upgrade_benefit: string | null
+    upgrade_blocked_reason: string | null
+    nvidia_cuda_version: string | null
     current_speed_ms: number
     upgraded_speed_ms: number
     clip_batch_size: number
