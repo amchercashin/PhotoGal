@@ -2305,7 +2305,7 @@ dependencies = [
 
 [[package]]
 name = "photogal"
-version = "0.5.13"
+version = "0.5.14"
 dependencies = [
  "dirs 5.0.1",
  "serde",
