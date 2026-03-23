@@ -165,6 +165,11 @@ pub fn download_cuda_addon(
     eprintln!("Download complete: {} MB", downloaded / 1_048_576);
 
     // --- Extract 7z ---
+    let _ = handle.emit("cuda-download-progress", serde_json::json!({
+        "stage": "extracting",
+        "downloaded_mb": downloaded as f64 / 1_048_576.0,
+        "total_mb": total_bytes.map(|t| t as f64 / 1_048_576.0)
+    }));
     eprintln!("Extracting to {:?}", extract_dir);
     if extract_dir.exists() {
         let _ = fs::remove_dir_all(&extract_dir);
@@ -176,6 +181,9 @@ pub fn download_cuda_addon(
         .map_err(|e| format!("Failed to extract 7z archive: {e}"))?;
 
     // --- Safe swap ---
+    let _ = handle.emit("cuda-download-progress", serde_json::json!({
+        "stage": "installing"
+    }));
     let port = *port_state.lock().unwrap();
     let backup_dir = sidecar_dir.with_file_name("sidecar-cpu-backup");
 
@@ -234,7 +242,16 @@ pub fn download_cuda_addon(
                 eprintln!("CUDA sidecar installed successfully");
                 Ok("cuda".to_string())
             } else {
-                eprintln!("CUDA sidecar failed health check, restoring CPU backup");
+                // Preserve CUDA crash log before CPU restart overwrites it
+                let log_path = crate::sidecar_log_path();
+                let cuda_log = log_path.with_file_name("sidecar-cuda-crash.log");
+                let crash_details = fs::read_to_string(&log_path).unwrap_or_default();
+                let _ = fs::copy(&log_path, &cuda_log);
+                eprintln!("CUDA sidecar failed health check, log saved to {:?}", cuda_log);
+                if !crash_details.is_empty() {
+                    eprintln!("CUDA sidecar log:\n{}", crash_details);
+                }
+
                 // Kill broken CUDA process
                 if let Ok(mut guard) = backend_state.0.lock() {
                     if let Some(mut c) = guard.take() {
@@ -256,7 +273,14 @@ pub fn download_cuda_addon(
                     wait_for_backend(port, 30_000);
                 }
                 let _ = fs::remove_file(&archive_path);
-                Err("CUDA sidecar failed to start — restored CPU version".to_string())
+
+                // Include crash log snippet in error for frontend display
+                let snippet = if crash_details.len() > 200 {
+                    format!("...{}", &crash_details[crash_details.len()-200..])
+                } else {
+                    crash_details
+                };
+                Err(format!("CUDA sidecar failed to start — restored CPU version.\nLog: {}", snippet))
             }
         }
         Err(e) => {

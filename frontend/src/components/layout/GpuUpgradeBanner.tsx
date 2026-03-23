@@ -9,6 +9,7 @@ export function GpuUpgradeBanner() {
   const { data: device } = useDeviceInfo()
   const [cudaInstalled, setCudaInstalled] = useState<boolean | null>(null)
   const [state, setState] = useState<DownloadState>('idle')
+  const [stage, setStage] = useState<string>('downloading')
   const [downloadedMb, setDownloadedMb] = useState(0)
   const [totalMb, setTotalMb] = useState<number | null>(null)
   const [speed, setSpeed] = useState<number | null>(null)
@@ -23,8 +24,9 @@ export function GpuUpgradeBanner() {
 
   useEffect(() => {
     const unlisten = listen('cuda-download-progress', (event: any) => {
-      const { downloaded_mb, total_mb } = event.payload
-      setDownloadedMb(Math.round(downloaded_mb))
+      const { downloaded_mb, total_mb, stage: s } = event.payload
+      if (s) setStage(s)
+      if (downloaded_mb != null) setDownloadedMb(Math.round(downloaded_mb))
       if (total_mb != null) setTotalMb(Math.round(total_mb))
 
       if (downloadStart.current > 0 && downloaded_mb > 0) {
@@ -86,21 +88,27 @@ export function GpuUpgradeBanner() {
       {state === 'downloading' && (
         <div className="space-y-2">
           <div className="flex items-center justify-between text-sm text-amber-200">
-            <span>Скачивание GPU-ускорения...</span>
             <span>
-              {downloadedMb}{totalMb ? ` / ${totalMb}` : ''} MB
-              {speed != null && ` · ${speed} MB/s`}
-              {etaMin != null && ` · ~${etaMin} мин`}
+              {stage === 'extracting' ? 'Распаковка...' :
+               stage === 'installing' ? 'Установка GPU-ускорения...' :
+               'Скачивание GPU-ускорения...'}
             </span>
+            {stage === 'downloading' && (
+              <span>
+                {downloadedMb}{totalMb ? ` / ${totalMb}` : ''} MB
+                {speed != null && ` · ${speed} MB/s`}
+                {etaMin != null && ` · ~${etaMin} мин`}
+              </span>
+            )}
           </div>
           <div className="h-1.5 rounded-full bg-amber-900/50 overflow-hidden">
-            {pct != null ? (
+            {stage !== 'downloading' || pct == null ? (
+              <div className="h-full rounded-full bg-amber-500 animate-indeterminate" />
+            ) : (
               <div
                 className="h-full rounded-full bg-amber-500 transition-all duration-300"
                 style={{ width: `${pct}%` }}
               />
-            ) : (
-              <div className="h-full rounded-full bg-amber-500 animate-indeterminate" />
             )}
           </div>
         </div>
