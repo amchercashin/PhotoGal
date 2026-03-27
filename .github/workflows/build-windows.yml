@@ -184,17 +184,49 @@ jobs:
         working-directory: backend
         run: .venv\Scripts\python.exe -m PyInstaller photogal-server.spec --noconfirm
 
-      - name: Trim unused CUDA DLLs
+      - name: Trim unused CUDA DLLs (dependency-aware)
         working-directory: backend/dist/photogal-server
         run: |
-          $ErrorActionPreference = 'SilentlyContinue'
-          $before = (Get-ChildItem -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-          foreach ($pattern in @("cufft*", "cusparse*", "cusolver*", "curand*", "nccl*", "nvtx*", "cutensor*", "nvrtc*", "nvJitLink*", "caffe2_nvrtc*")) {
-            Get-ChildItem -Recurse -Filter $pattern | Remove-Item -Force -ErrorAction SilentlyContinue
+          $torchLib = "_internal\torch\lib"
+          if (-not (Test-Path $torchLib)) {
+            Write-Host "torch/lib not found, skipping trim"
+            exit 0
           }
-          $ErrorActionPreference = 'Stop'
-          $after = (Get-ChildItem -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-          Write-Host "Sidecar size: $([math]::Round($before, 0)) MB -> $([math]::Round($after, 0)) MB (trimmed $([math]::Round($before - $after, 0)) MB)"
+          $before = (Get-ChildItem $torchLib -Filter "*.dll" | Measure-Object -Property Length -Sum).Sum / 1MB
+
+          # Safe to remove unconditionally (not needed for inference, no dependents)
+          $safeToRemove = @("nccl*", "nvtx*", "cutensor*", "caffe2_nvrtc*")
+          foreach ($pattern in $safeToRemove) {
+            Get-ChildItem "$torchLib\$pattern" -ErrorAction SilentlyContinue |
+              ForEach-Object { Remove-Item $_.FullName -Force; Write-Host "Removed (safe): $($_.Name)" }
+          }
+
+          # Candidates: remove only if no remaining DLL depends on them
+          $candidates = @("cufft*", "cusolver*", "curand*", "nvrtc*")
+          foreach ($pattern in $candidates) {
+            $dlls = Get-ChildItem "$torchLib\$pattern" -ErrorAction SilentlyContinue
+            foreach ($dll in $dlls) {
+              $dllName = $dll.Name
+              $isNeeded = $false
+              Get-ChildItem "$torchLib\*.dll" -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -ne $dllName } |
+                ForEach-Object {
+                  $deps = & dumpbin /dependents $_.FullName 2>$null
+                  if ($deps -match [regex]::Escape($dllName)) { $isNeeded = $true }
+                }
+              if ($isNeeded) {
+                Write-Host "Kept (has dependents): $dllName"
+              } else {
+                Remove-Item $dll.FullName -Force
+                Write-Host "Removed (no dependents): $dllName"
+              }
+            }
+          }
+
+          # Never remove: cudart, cublas, cublasLt, cusparse, nvJitLink, cudnn, c10_cuda, torch_cuda
+
+          $after = (Get-ChildItem $torchLib -Filter "*.dll" | Measure-Object -Property Length -Sum).Sum / 1MB
+          Write-Host "DLL size: $([math]::Round($before, 0)) MB -> $([math]::Round($after, 0)) MB (trimmed $([math]::Round($before - $after, 0)) MB)"
 
       - name: Get version
         id: version
