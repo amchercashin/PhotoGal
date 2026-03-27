@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 try:
     import torch
@@ -125,16 +125,20 @@ def _parse_nvidia_smi() -> tuple[str | None, str | None, str | None, tuple | Non
                 compute_capability = (int(cap_parts[0]), int(cap_parts[1]))
 
         # Call 2: plain nvidia-smi to parse CUDA version from header
-        plain_result = subprocess.run(
-            ["nvidia-smi"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
+        # Independent try/except so timeout on call 2 doesn't discard call 1 data
         cuda_version: str | None = None
-        if plain_result.returncode == 0:
-            cuda_match = re.search(r"CUDA Version:\s+(\d+\.\d+)", plain_result.stdout)
-            cuda_version = cuda_match.group(1) if cuda_match else None
+        try:
+            plain_result = subprocess.run(
+                ["nvidia-smi"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if plain_result.returncode == 0:
+                cuda_match = re.search(r"CUDA Version:\s+(\d+\.\d+)", plain_result.stdout)
+                cuda_version = cuda_match.group(1) if cuda_match else None
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass  # call 1 data preserved
 
         return gpu_name, cuda_version, driver_version, compute_capability
 
@@ -212,28 +216,31 @@ def detect_capabilities() -> DeviceInfo:
     if smi_gpu_name:
         gpu_name = smi_gpu_name
 
-        # Check driver version first
-        blocked = False
+        # Check driver version first (pessimistic: block unless proven OK)
+        driver_ok = False
         if driver_version:
-            drv_parts = driver_version.split(".")
             try:
-                drv_tuple = (int(drv_parts[0]), int(drv_parts[1]))
+                drv_parts = driver_version.split(".")
+                drv_tuple = (int(drv_parts[0]), int(drv_parts[1]) if len(drv_parts) > 1 else 0)
+                driver_ok = drv_tuple >= REQUIRED_DRIVER_VERSION
             except (IndexError, ValueError):
-                drv_tuple = (0, 0)
+                pass
 
-            if drv_tuple < REQUIRED_DRIVER_VERSION:
-                blocked = True
-                req_str = f"{REQUIRED_DRIVER_VERSION[0]}.{REQUIRED_DRIVER_VERSION[1]}"
-                upgrade_blocked_reason = (
-                    f"Драйвер NVIDIA ({driver_version}) устарел, нужна версия ≥{req_str}."
-                )
-                upgrade_fix_action = "Обновите драйвер NVIDIA"
-                upgrade_fix_url = "https://www.nvidia.com/drivers"
-                logger.warning(
-                    "NVIDIA GPU found but driver %s < required %s",
-                    driver_version,
-                    req_str,
-                )
+        blocked = False
+        if not driver_ok:
+            blocked = True
+            req_str = f"{REQUIRED_DRIVER_VERSION[0]}.{REQUIRED_DRIVER_VERSION[1]}"
+            upgrade_blocked_reason = (
+                f"Драйвер NVIDIA ({driver_version or 'неизвестно'}) устарел, "
+                f"нужна версия ≥{req_str}."
+            )
+            upgrade_fix_action = "Обновите драйвер NVIDIA"
+            upgrade_fix_url = "https://www.nvidia.com/drivers"
+            logger.warning(
+                "NVIDIA GPU found but driver %s < required %s",
+                driver_version or "unknown",
+                req_str,
+            )
 
         # Check compute capability
         if not blocked and compute_capability is not None:
