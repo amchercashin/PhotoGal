@@ -318,3 +318,33 @@ def test_detect_cpu_good_gpu_offers_upgrade(mock_platform, mock_torch, mock_pars
     assert info.upgrade_blocked_reason is None
     assert info.gpu_name == "NVIDIA GeForce RTX 3060"
     assert info.driver_version == "572.16"
+
+
+@patch("photogal.device._find_cuda_fallback_reason")
+@patch("photogal.device._parse_nvidia_smi")
+@patch("photogal.device.torch")
+@patch("photogal.device.platform")
+def test_detect_cpu_with_cuda_fallback(mock_platform, mock_torch, mock_smi, mock_fallback):
+    """When cuda_fallback_reason.json exists, detect_capabilities populates cuda_failed fields."""
+    mock_torch.cuda.is_available.return_value = False
+    mock_torch.backends.mps.is_available.return_value = False
+    mock_torch.float32 = "float32"
+    mock_platform.machine.return_value = "AMD64"
+    mock_smi.return_value = ("NVIDIA RTX 3070", "12.8", "570.86", (8, 6))
+    mock_fallback.return_value = {
+        "reason": "cudart_load_failed",
+        "failed_dll": "cudart64_12.dll",
+        "error": "WinError 126",
+        "message": "Драйвер NVIDIA не поддерживает CUDA 12.8.",
+        "fix_action": "Обновите драйвер NVIDIA",
+        "fix_url": "https://www.nvidia.com/drivers",
+        "driver_update_helps": True,
+    }
+
+    _reset()
+    info = detect_capabilities()
+    assert info.cuda_failed is True
+    assert "CUDA 12.8" in info.cuda_failed_reason
+    assert info.cuda_fix_url == "https://www.nvidia.com/drivers"
+    assert info.cuda_driver_update_helps is True
+    assert info.upgrade_available is False  # Don't offer re-download when quarantined

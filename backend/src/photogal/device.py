@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import platform
@@ -141,6 +142,21 @@ def _parse_nvidia_smi() -> tuple[str | None, str | None, str | None, tuple | Non
         return None, None, None, None
 
 
+def _find_cuda_fallback_reason() -> dict | None:
+    """Read cuda_fallback_reason.json from sidecar dir (frozen Windows builds only)."""
+    if not getattr(sys, 'frozen', False) or sys.platform != 'win32':
+        return None
+    sidecar_dir = os.path.dirname(sys.executable)
+    path = os.path.join(sidecar_dir, "cuda_fallback_reason.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def detect_capabilities() -> DeviceInfo:
     """Detect hardware capabilities. Not cached — use get_device_info()."""
     # 1. CUDA
@@ -260,6 +276,24 @@ def detect_capabilities() -> DeviceInfo:
         upgrade_available = True
         upgrade_size_mb = 0
 
+    # Check if Layer 2 pre-flight quarantined CUDA DLLs
+    fallback = _find_cuda_fallback_reason()
+    cuda_failed = False
+    cuda_failed_reason = None
+    cuda_fix_action = None
+    cuda_fix_url = None
+    cuda_driver_update_helps = False
+    cuda_quarantined = False
+
+    if fallback:
+        cuda_failed = True
+        cuda_failed_reason = fallback.get("message")
+        cuda_fix_action = fallback.get("fix_action")
+        cuda_fix_url = fallback.get("fix_url")
+        cuda_driver_update_helps = fallback.get("driver_update_helps", False)
+        cuda_quarantined = True
+        upgrade_available = False  # Don't offer download while quarantined
+
     return DeviceInfo(
         backend="cpu",
         gpu_name=gpu_name,
@@ -274,6 +308,12 @@ def detect_capabilities() -> DeviceInfo:
         driver_version=driver_version,
         upgrade_fix_action=upgrade_fix_action,
         upgrade_fix_url=upgrade_fix_url,
+        cuda_failed=cuda_failed,
+        cuda_failed_reason=cuda_failed_reason,
+        cuda_fix_action=cuda_fix_action,
+        cuda_fix_url=cuda_fix_url,
+        cuda_driver_update_helps=cuda_driver_update_helps,
+        cuda_quarantined=cuda_quarantined,
     )
 
 
