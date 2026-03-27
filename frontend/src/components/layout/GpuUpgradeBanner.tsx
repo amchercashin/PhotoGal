@@ -1,14 +1,16 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { useQueryClient } from '@tanstack/react-query'
 import { useDeviceInfo } from '../../hooks/useDeviceInfo'
 
-type DownloadState = 'idle' | 'downloading' | 'success' | 'error'
+type BannerState = 'idle' | 'downloading' | 'success' | 'error' | 'retrying'
 
 export function GpuUpgradeBanner() {
   const { data: device } = useDeviceInfo()
+  const queryClient = useQueryClient()
   const [cudaInstalled, setCudaInstalled] = useState<boolean | null>(null)
-  const [state, setState] = useState<DownloadState>('idle')
+  const [state, setState] = useState<BannerState>('idle')
   const [stage, setStage] = useState<string>('downloading')
   const [downloadedMb, setDownloadedMb] = useState(0)
   const [totalMb, setTotalMb] = useState<number | null>(null)
@@ -39,11 +41,15 @@ export function GpuUpgradeBanner() {
     return () => { unlisten.then(fn => fn()) }
   }, [])
 
-  // Don't show if: CUDA already installed, no NVIDIA GPU, or still loading
-  if (cudaInstalled === null || cudaInstalled) return null
-  if (!device?.upgrade_available && !device?.upgrade_blocked_reason) return null
+  // Visibility logic:
+  // Hide if still loading
+  if (cudaInstalled === null) return null
+  // Hide if CUDA installed and not failed
+  if (cudaInstalled && !device?.cuda_failed) return null
+  // Hide if no upgrade available, no blocked reason, and no cuda_failed
+  if (!device?.upgrade_available && !device?.upgrade_blocked_reason && !device?.cuda_failed) return null
 
-  const sizeLabel = device.upgrade_size_mb
+  const sizeLabel = device?.upgrade_size_mb
     ? `~${(device.upgrade_size_mb / 1024).toFixed(1)} GB`
     : ''
 
@@ -55,13 +61,50 @@ export function GpuUpgradeBanner() {
     setError('')
     downloadStart.current = Date.now()
     try {
-      await invoke('download_cuda_addon')
-      setState('success')
-      setTimeout(() => setCudaInstalled(true), 2000)
+      const result: any = await invoke('download_cuda_addon')
+      // Check if result is a fallback (JSON with status: "fallback")
+      let isFallback = false
+      if (result && typeof result === 'object' && result.status === 'fallback') {
+        isFallback = true
+      } else if (typeof result === 'string') {
+        try {
+          const parsed = JSON.parse(result)
+          if (parsed.status === 'fallback') isFallback = true
+        } catch { /* not JSON */ }
+      }
+
+      if (isFallback) {
+        // Refresh device info — banner will update to show cuda_failed state
+        await queryClient.invalidateQueries({ queryKey: ['device-info'] })
+        setState('idle')
+      } else {
+        setState('success')
+        setTimeout(() => {
+          setCudaInstalled(true)
+          queryClient.invalidateQueries({ queryKey: ['device-info'] })
+        }, 2000)
+      }
     } catch (e: any) {
       setState('error')
       setError(String(e))
     }
+  }
+
+  const handleRetry = async () => {
+    setState('retrying')
+    try {
+      await invoke('retry_cuda')
+    } catch { /* ignore */ }
+    await queryClient.invalidateQueries({ queryKey: ['device-info'] })
+    setState('idle')
+  }
+
+  const handleRedownload = async () => {
+    // Clear quarantine first, then re-download
+    try {
+      await invoke('retry_cuda')
+    } catch { /* ignore */ }
+    await handleDownload()
   }
 
   const pct = totalMb && totalMb > 0 ? Math.min(100, (downloadedMb / totalMb) * 100) : null
@@ -69,18 +112,85 @@ export function GpuUpgradeBanner() {
     ? Math.ceil((totalMb - downloadedMb) / speed / 60)
     : null
 
-  return (
-    <div className="mx-4 mt-2 rounded-lg border border-amber-700/50 bg-amber-950/50 px-4 py-3">
-      {state === 'idle' && device?.upgrade_blocked_reason && (
+  // --- CUDA Failed state ---
+  if (device?.cuda_failed && state === 'idle') {
+    return (
+      <div className="mx-4 mt-2 rounded-lg border border-red-700/50 bg-red-950/50 px-4 py-3">
+        <p className="text-sm text-red-200">
+          GPU-ускорение не запустилось: {device.cuda_failed_reason}
+        </p>
+        <div className="mt-2 flex items-center gap-3">
+          {device.cuda_fix_url && (
+            <a
+              href={device.cuda_fix_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-red-300 underline hover:text-red-200"
+            >
+              {device.cuda_fix_action ?? 'Подробнее'} →
+            </a>
+          )}
+          {(device.cuda_driver_update_helps || device.cuda_fix_url?.includes('aka.ms')) ? (
+            <button
+              onClick={handleRetry}
+              className="shrink-0 rounded bg-red-800 px-3 py-1 text-xs font-medium text-red-100 hover:bg-red-700"
+            >
+              Повторить
+            </button>
+          ) : (
+            <button
+              onClick={handleRedownload}
+              className="shrink-0 rounded bg-red-800 px-3 py-1 text-xs font-medium text-red-100 hover:bg-red-700"
+            >
+              Скачать заново
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  // --- Retrying state ---
+  if (state === 'retrying') {
+    return (
+      <div className="mx-4 mt-2 rounded-lg border border-amber-700/50 bg-amber-950/50 px-4 py-3">
+        <div className="flex items-center gap-2 text-sm text-amber-200">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-amber-400 border-t-transparent" />
+          <span>Проверяем GPU-ускорение...</span>
+        </div>
+      </div>
+    )
+  }
+
+  // --- Blocked state ---
+  if (device?.upgrade_blocked_reason && !device?.cuda_failed && state === 'idle') {
+    return (
+      <div className="mx-4 mt-2 rounded-lg border border-amber-700/50 bg-amber-950/50 px-4 py-3">
         <p className="text-sm text-amber-200/70">
           Обнаружена <span className="font-medium">{device.gpu_detected ?? 'NVIDIA GPU'}</span>.
           {' '}{device.upgrade_blocked_reason}
         </p>
-      )}
-      {state === 'idle' && !device?.upgrade_blocked_reason && (
+        {device.upgrade_fix_url && (
+          <a
+            href={device.upgrade_fix_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-1 inline-block text-xs text-amber-300 underline hover:text-amber-200"
+          >
+            {device.upgrade_fix_action ?? 'Подробнее'} →
+          </a>
+        )}
+      </div>
+    )
+  }
+
+  // --- Available / Downloading / Success / Error states ---
+  return (
+    <div className="mx-4 mt-2 rounded-lg border border-amber-700/50 bg-amber-950/50 px-4 py-3">
+      {state === 'idle' && (
         <div className="flex items-center justify-between gap-4">
           <p className="text-sm text-amber-200">
-            Обнаружена <span className="font-medium">{device.gpu_detected ?? 'NVIDIA GPU'}</span>.
+            Обнаружена <span className="font-medium">{device?.gpu_detected ?? 'NVIDIA GPU'}</span>.
             {' '}Скачайте GPU-ускорение для быстрой обработки {sizeLabel && `(${sizeLabel})`}
           </p>
           <button

@@ -22,6 +22,8 @@ def device_status():
         "gpu_detected": info.gpu_name,
         "gpu_backend_installed": info.gpu_backend_installed,
         "gpu_validated": info.gpu_validated,
+        "compute_capability": list(info.compute_capability) if info.compute_capability else None,
+        "driver_version": info.driver_version,
         "upgrade_available": info.upgrade_available,
         "upgrade_size_mb": info.upgrade_size_mb,
         "upgrade_benefit": (
@@ -29,9 +31,17 @@ def device_status():
             if info.upgrade_available else None
         ),
         "upgrade_blocked_reason": info.upgrade_blocked_reason,
+        "upgrade_fix_action": info.upgrade_fix_action,
+        "upgrade_fix_url": info.upgrade_fix_url,
         "nvidia_cuda_version": info.nvidia_cuda_version,
         "current_speed_ms": current_speed,
         "upgraded_speed_ms": upgraded_speed,
         "clip_batch_size": info.get_optimal_batch_size("clip"),
         "face_batch_size": info.get_optimal_batch_size("face"),
+        "cuda_failed": info.cuda_failed,
+        "cuda_failed_reason": info.cuda_failed_reason,
+        "cuda_fix_action": info.cuda_fix_action,
+        "cuda_fix_url": info.cuda_fix_url,
+        "cuda_driver_update_helps": info.cuda_driver_update_helps,
+        "cuda_quarantined": info.cuda_quarantined,
     }

@@ -211,6 +211,7 @@ pub fn run() {
             reveal_in_finder,
             cuda::download_cuda_addon,
             cuda::check_cuda_status,
+            cuda::retry_cuda,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -320,15 +320,25 @@ export const api = {
     gpu_detected: string | null
     gpu_backend_installed: boolean
     gpu_validated: boolean | null
+    compute_capability: number[] | null
+    driver_version: string | null
     upgrade_available: boolean
     upgrade_size_mb: number | null
     upgrade_benefit: string | null
     upgrade_blocked_reason: string | null
+    upgrade_fix_action: string | null
+    upgrade_fix_url: string | null
     nvidia_cuda_version: string | null
     current_speed_ms: number
     upgraded_speed_ms: number
     clip_batch_size: number
     face_batch_size: number
+    cuda_failed: boolean
+    cuda_failed_reason: string | null
+    cuda_fix_action: string | null
+    cuda_fix_url: string | null
+    cuda_driver_update_helps: boolean
+    cuda_quarantined: boolean
   }>('/device/'),
 
   // Health
