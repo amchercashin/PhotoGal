@@ -194,6 +194,18 @@ jobs:
           }
           $before = (Get-ChildItem $torchLib -Filter "*.dll" | Measure-Object -Property Length -Sum).Sum / 1MB
 
+          # Locate dumpbin via vswhere (not on PATH by default)
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath 2>$null
+          $dumpbinExe = $null
+          if ($vsPath) {
+            $dumpbinExe = Get-ChildItem "$vsPath\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if ($dumpbinExe) {
+            Write-Host "Found dumpbin: $($dumpbinExe.FullName)"
+          } else {
+            Write-Host "WARNING: dumpbin not found, will use safe-only trim"
+          }
+
           # Safe to remove unconditionally (not needed for inference, no dependents)
           $safeToRemove = @("nccl*", "nvtx*", "cutensor*", "caffe2_nvrtc*")
           foreach ($pattern in $safeToRemove) {
@@ -203,24 +215,28 @@ jobs:
 
           # Candidates: remove only if no remaining DLL depends on them
           $candidates = @("cufft*", "cusolver*", "curand*", "nvrtc*")
-          foreach ($pattern in $candidates) {
-            $dlls = Get-ChildItem "$torchLib\$pattern" -ErrorAction SilentlyContinue
-            foreach ($dll in $dlls) {
-              $dllName = $dll.Name
-              $isNeeded = $false
-              Get-ChildItem "$torchLib\*.dll" -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -ne $dllName } |
-                ForEach-Object {
-                  $deps = & dumpbin /dependents $_.FullName 2>$null
-                  if ($deps -match [regex]::Escape($dllName)) { $isNeeded = $true }
+          if ($dumpbinExe) {
+            foreach ($pattern in $candidates) {
+              $dlls = Get-ChildItem "$torchLib\$pattern" -ErrorAction SilentlyContinue
+              foreach ($dll in $dlls) {
+                $dllName = $dll.Name
+                $isNeeded = $false
+                Get-ChildItem "$torchLib\*.dll" -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Name -ne $dllName } |
+                  ForEach-Object {
+                    $deps = & $dumpbinExe.FullName /dependents $_.FullName 2>$null
+                    if ($deps -match [regex]::Escape($dllName)) { $isNeeded = $true }
+                  }
+                if ($isNeeded) {
+                  Write-Host "Kept (has dependents): $dllName"
+                } else {
+                  Remove-Item $dll.FullName -Force
+                  Write-Host "Removed (no dependents): $dllName"
                 }
-              if ($isNeeded) {
-                Write-Host "Kept (has dependents): $dllName"
-              } else {
-                Remove-Item $dll.FullName -Force
-                Write-Host "Removed (no dependents): $dllName"
               }
             }
+          } else {
+            Write-Host "Skipping dependency-aware trim (no dumpbin)"
           }
 
           # Never remove: cudart, cublas, cublasLt, cusparse, nvJitLink, cudnn, c10_cuda, torch_cuda
