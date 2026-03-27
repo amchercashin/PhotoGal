@@ -2,7 +2,13 @@
 
 from unittest.mock import patch, MagicMock
 
-from photogal.device import DeviceInfo, detect_capabilities, get_device_info, _reset
+from photogal.device import (
+    DeviceInfo,
+    detect_capabilities,
+    get_device_info,
+    _reset,
+    _parse_nvidia_smi,
+)
 
 
 # --- Detection tests ---
@@ -47,15 +53,18 @@ def test_detect_mps(mock_platform, mock_torch):
     assert info.gpu_backend_installed is True
 
 
+@patch("photogal.device._parse_nvidia_smi")
 @patch("photogal.device.torch")
 @patch("photogal.device.platform")
-def test_detect_cpu_fallback(mock_platform, mock_torch):
+def test_detect_cpu_fallback(mock_platform, mock_torch, mock_parse_smi):
     """When no GPU, backend='cpu' and dtype=float32."""
     mock_torch.cuda.is_available.return_value = False
     mock_torch.backends.mps.is_available.return_value = False
     mock_torch.float16 = "float16"
     mock_torch.float32 = "float32"
     mock_platform.machine.return_value = "x86_64"
+    # _parse_nvidia_smi now returns 4 values
+    mock_parse_smi.return_value = (None, None, None, None)
 
     _reset()
     info = detect_capabilities()
@@ -159,3 +168,153 @@ def test_config_batch_sizes_default_none():
     cfg = Config()
     assert cfg.clip_batch_size_gpu is None
     assert cfg.clip_batch_size_cpu is None
+
+
+# --- _parse_nvidia_smi tests ---
+
+
+@patch("photogal.device.subprocess.run")
+def test_parse_nvidia_smi_full(mock_run):
+    """Good --query-gpu output returns all 4 values correctly."""
+    # First call: --query-gpu (structured CSV)
+    query_result = MagicMock()
+    query_result.returncode = 0
+    query_result.stdout = "NVIDIA GeForce RTX 4070, 8.9, 535.104\n"
+
+    # Second call: plain nvidia-smi (CUDA version from header)
+    plain_result = MagicMock()
+    plain_result.returncode = 0
+    plain_result.stdout = (
+        "| NVIDIA-SMI 535.104   Driver Version: 535.104   CUDA Version: 12.2  |\n"
+        "|   0  NVIDIA GeForce RTX 4070     Off |\n"
+    )
+
+    mock_run.side_effect = [query_result, plain_result]
+
+    gpu_name, cuda_version, driver_version, compute_capability = _parse_nvidia_smi()
+
+    assert gpu_name == "NVIDIA GeForce RTX 4070"
+    assert cuda_version == "12.2"
+    assert driver_version == "535.104"
+    assert compute_capability == (8, 9)
+
+
+@patch("photogal.device.subprocess.run")
+def test_parse_nvidia_smi_old_driver(mock_run):
+    """Old driver (e.g. 472.12) parses correctly."""
+    query_result = MagicMock()
+    query_result.returncode = 0
+    query_result.stdout = "NVIDIA GeForce GTX 1080, 6.1, 472.12\n"
+
+    plain_result = MagicMock()
+    plain_result.returncode = 0
+    plain_result.stdout = (
+        "| NVIDIA-SMI 472.12   Driver Version: 472.12   CUDA Version: 11.4  |\n"
+    )
+
+    mock_run.side_effect = [query_result, plain_result]
+
+    gpu_name, cuda_version, driver_version, compute_capability = _parse_nvidia_smi()
+
+    assert gpu_name == "NVIDIA GeForce GTX 1080"
+    assert driver_version == "472.12"
+    assert compute_capability == (6, 1)
+    assert cuda_version == "11.4"
+
+
+@patch("photogal.device.subprocess.run")
+def test_parse_nvidia_smi_not_found(mock_run):
+    """FileNotFoundError returns all None."""
+    mock_run.side_effect = FileNotFoundError
+
+    gpu_name, cuda_version, driver_version, compute_capability = _parse_nvidia_smi()
+
+    assert gpu_name is None
+    assert cuda_version is None
+    assert driver_version is None
+    assert compute_capability is None
+
+
+# --- detect_capabilities CPU path tests ---
+
+
+@patch("photogal.device._parse_nvidia_smi")
+@patch("photogal.device.torch")
+@patch("photogal.device.platform")
+def test_detect_cpu_driver_too_old(mock_platform, mock_torch, mock_parse_smi):
+    """Old driver version blocks upgrade with message containing '570.65'."""
+    mock_torch.cuda.is_available.return_value = False
+    mock_torch.backends.mps.is_available.return_value = False
+    mock_torch.float16 = "float16"
+    mock_torch.float32 = "float32"
+    mock_platform.machine.return_value = "x86_64"
+    mock_parse_smi.return_value = (
+        "NVIDIA GeForce GTX 1080",
+        "11.4",
+        "472.12",       # driver too old (< 570.65)
+        (6, 1),         # CC fine
+    )
+
+    _reset()
+    info = detect_capabilities()
+
+    assert info.backend == "cpu"
+    assert info.upgrade_available is False
+    assert info.upgrade_blocked_reason is not None
+    assert "570.65" in info.upgrade_blocked_reason
+    assert info.upgrade_fix_action is not None
+    assert info.upgrade_fix_url == "https://www.nvidia.com/drivers"
+
+
+@patch("photogal.device._parse_nvidia_smi")
+@patch("photogal.device.torch")
+@patch("photogal.device.platform")
+def test_detect_cpu_gpu_too_old(mock_platform, mock_torch, mock_parse_smi):
+    """CC < 5.0 blocks upgrade with no fix_url (hardware limitation)."""
+    mock_torch.cuda.is_available.return_value = False
+    mock_torch.backends.mps.is_available.return_value = False
+    mock_torch.float16 = "float16"
+    mock_torch.float32 = "float32"
+    mock_platform.machine.return_value = "x86_64"
+    mock_parse_smi.return_value = (
+        "NVIDIA GeForce GT 730",
+        "12.2",
+        "572.16",       # driver fine (>= 570.65)
+        (3, 5),         # CC < 5.0 — Kepler, too old
+    )
+
+    _reset()
+    info = detect_capabilities()
+
+    assert info.backend == "cpu"
+    assert info.upgrade_available is False
+    assert info.upgrade_blocked_reason is not None
+    assert "5.0" in info.upgrade_blocked_reason
+    assert info.upgrade_fix_url is None  # hardware limitation, no fix URL
+
+
+@patch("photogal.device._parse_nvidia_smi")
+@patch("photogal.device.torch")
+@patch("photogal.device.platform")
+def test_detect_cpu_good_gpu_offers_upgrade(mock_platform, mock_torch, mock_parse_smi):
+    """Good driver and CC >= 5.0 → upgrade_available=True."""
+    mock_torch.cuda.is_available.return_value = False
+    mock_torch.backends.mps.is_available.return_value = False
+    mock_torch.float16 = "float16"
+    mock_torch.float32 = "float32"
+    mock_platform.machine.return_value = "x86_64"
+    mock_parse_smi.return_value = (
+        "NVIDIA GeForce RTX 3060",
+        "12.8",
+        "572.16",       # driver >= 570.65
+        (8, 6),         # CC >= 5.0
+    )
+
+    _reset()
+    info = detect_capabilities()
+
+    assert info.backend == "cpu"
+    assert info.upgrade_available is True
+    assert info.upgrade_blocked_reason is None
+    assert info.gpu_name == "NVIDIA GeForce RTX 3060"
+    assert info.driver_version == "572.16"
