@@ -90,6 +90,105 @@ pub async fn download_cuda_addon(handle: AppHandle) -> Result<String, String> {
     .map_err(|e| format!("Internal error: {e}"))?
 }
 
+/// Retry CUDA after user fixes the issue (driver update, VC++ install).
+/// Moves quarantined DLLs back, restores marker, restarts sidecar.
+#[tauri::command]
+pub async fn retry_cuda(handle: AppHandle) -> Result<String, String> {
+    let handle2 = handle.clone();
+    tauri::async_runtime::spawn_blocking(move || do_retry_cuda(handle2))
+        .await
+        .map_err(|e| format!("Internal error: {e}"))?
+}
+
+fn do_retry_cuda(handle: AppHandle) -> Result<String, String> {
+    let sidecar_bin = crate::find_sidecar_path(&handle)
+        .ok_or("Sidecar not found")?;
+    let sidecar_dir = sidecar_bin.parent().unwrap().to_path_buf();
+    let torch_lib = sidecar_dir.join("_internal").join("torch").join("lib");
+    let quarantine = torch_lib.join("_cuda_quarantine");
+
+    if !quarantine.exists() {
+        return Err("No quarantined CUDA DLLs found. Try downloading GPU acceleration again.".into());
+    }
+
+    // Move DLLs back from quarantine
+    let entries = fs::read_dir(&quarantine)
+        .map_err(|e| format!("Failed to read quarantine dir: {e}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read entry: {e}"))?;
+        let dest = torch_lib.join(entry.file_name());
+        fs::rename(entry.path(), &dest)
+            .map_err(|e| format!("Failed to restore {}: {e}", entry.file_name().to_string_lossy()))?;
+    }
+    let _ = fs::remove_dir(&quarantine);
+
+    // Remove fallback reason file
+    let _ = fs::remove_file(sidecar_dir.join("cuda_fallback_reason.json"));
+
+    // Restore cuda_installed marker
+    let _ = fs::write(sidecar_dir.join("cuda_installed"), "1");
+
+    // Get port
+    let port = {
+        let state = handle.state::<std::sync::Mutex<u16>>();
+        let val = *state.lock().unwrap_or_else(|e| e.into_inner());
+        val
+    };
+
+    // Stop current sidecar
+    {
+        let backend_state = handle.state::<BackendProcess>();
+        let mut guard = backend_state.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(ref mut child) = *guard {
+            stop_sidecar(child);
+        }
+        let _ = guard.take();
+    }
+    std::thread::sleep(Duration::from_secs(2));
+
+    // Restart sidecar
+    let bin_name = format!("photogal-server-bin{}", std::env::consts::EXE_SUFFIX);
+    let new_bin = sidecar_dir.join(&bin_name);
+    match crate::start_sidecar(&new_bin, port) {
+        Ok(child) => {
+            {
+                let backend_state = handle.state::<BackendProcess>();
+                let mut guard = backend_state.0.lock().unwrap_or_else(|e| e.into_inner());
+                *guard = Some(child);
+            }
+            std::thread::sleep(Duration::from_secs(2));
+
+            if !crate::wait_for_backend(port, 15_000) {
+                return Err("Sidecar failed to start after retry".into());
+            }
+
+            // Check if GPU is now active
+            match fetch_device_status(port) {
+                Ok(device) => {
+                    let backend = device["backend"].as_str().unwrap_or("cpu");
+                    if backend == "cuda" {
+                        Ok("cuda".to_string())
+                    } else if device["cuda_failed"].as_bool().unwrap_or(false) {
+                        let fallback = serde_json::json!({
+                            "status": "fallback",
+                            "backend": "cpu",
+                            "cuda_failed_reason": device["cuda_failed_reason"],
+                            "cuda_fix_action": device["cuda_fix_action"],
+                            "cuda_fix_url": device["cuda_fix_url"],
+                            "cuda_driver_update_helps": device["cuda_driver_update_helps"],
+                        });
+                        Ok(fallback.to_string())
+                    } else {
+                        Ok("cpu".to_string())
+                    }
+                }
+                Err(_) => Ok("unknown".to_string()),
+            }
+        }
+        Err(e) => Err(format!("Failed to restart sidecar: {e}")),
+    }
+}
+
 fn do_download_cuda(handle: AppHandle) -> Result<String, String> {
     let version = handle.package_info().version.to_string();
     let url = format!(
